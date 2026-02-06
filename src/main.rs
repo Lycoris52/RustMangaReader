@@ -9,8 +9,9 @@ use std::time::{Instant};
 use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::StrCmpLogicalW;
 use std::os::windows::ffi::OsStrExt;
-use egui::{Rect};
+use egui::{Rect, };
 use image::DynamicImage;
+use serde::{Serialize, Deserialize};
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -27,7 +28,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 enum ResizeMethod {
     Nearest,
     Triangle,   // Bilinear
@@ -42,6 +43,89 @@ impl ResizeMethod {
             ResizeMethod::Triangle => image::imageops::FilterType::Triangle,
             ResizeMethod::CatmullRom => image::imageops::FilterType::CatmullRom,
             ResizeMethod::Lanczos3 => image::imageops::FilterType::Lanczos3,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct Shortcut {
+    pub key: egui::Key,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl Shortcut {
+    // Helper to create a new shortcut easily
+    fn new(key: egui::Key, ctrl: bool, alt: bool, shift: bool) -> Self {
+        Self { key, ctrl, alt, shift }
+    }
+
+    // Helper to format the name for the UI (e.g., "Ctrl + O")
+    fn format(&self) -> String {
+        let mut parts = vec![];
+        if self.ctrl { parts.push("Ctrl"); }
+        if self.alt { parts.push("Alt"); }
+        if self.shift { parts.push("Shift"); }
+        let temp = format!("{:?}", self.key);
+        parts.push(&temp);
+        parts.join(" + ")
+    }
+}
+
+#[derive(PartialEq)]
+enum MangaAction {
+    None,
+    NextPage,
+    PrevPage,
+    NextFile,
+    PrevFile,
+    FullScreen,
+    ViewMode,
+    OpenFile,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct KeyConfig {
+    pub next_page: Shortcut,
+    pub prev_page: Shortcut,
+    pub next_file: Shortcut,
+    pub prev_file: Shortcut,
+    pub fullscreen: Shortcut,
+    pub view_mode: Shortcut,
+    pub open_file: Shortcut,
+}
+
+impl Default for KeyConfig {
+    fn default() -> Self {
+        Self {
+            next_page: Shortcut::new(egui::Key::ArrowLeft, false, false, false),
+            prev_page: Shortcut::new(egui::Key::ArrowRight, false, false, false),
+            next_file: Shortcut::new(egui::Key::ArrowLeft, true, false, false),
+            prev_file: Shortcut::new(egui::Key::ArrowRight, true, false, false),
+            fullscreen: Shortcut::new(egui::Key::Enter, true, false, false),
+            view_mode: Shortcut::new(egui::Key::Enter, false, false, false),
+            open_file: Shortcut::new(egui::Key::O, false, false, false),
+        }
+    }
+}
+
+
+#[derive(Serialize, Deserialize)]
+struct AppSettings {
+    resize_method: ResizeMethod,
+    settings_width: f32,
+    show_settings: bool,
+    keys: KeyConfig,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            resize_method: ResizeMethod::Triangle,
+            settings_width: 250.0,
+            show_settings: false,
+            keys: KeyConfig::default(),
         }
     }
 }
@@ -65,11 +149,22 @@ struct MangaReader {
     is_dialog_open: bool,
     zip_name_display: Option<(String, Instant)>,
     is_shifted: bool,
-    resize_method: ResizeMethod,
+    config: AppSettings, // This contains your KeyConfig
+    binding_action: Option<String>, // e.g., Some("Next Page")
 }
 
 impl MangaReader {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let config: AppSettings = if let Ok(data) = std::fs::read_to_string("settings.json") {
+            // We add |_| here to accept the error argument but ignore it
+            serde_json::from_str(&data).unwrap_or_else(|_| {
+                eprintln!("Failed to parse settings.json, using defaults.");
+                AppSettings::default()
+            })
+        } else {
+            AppSettings::default()
+        };
+
         let (tx, rx) = channel();
         Self {
             zip_path: None,
@@ -90,23 +185,31 @@ impl MangaReader {
             is_dialog_open: false,
             zip_name_display: None,
             is_shifted: false,
-            resize_method: ResizeMethod::Triangle,
+            config, // Store the loaded config here
+            binding_action: None,
         }
     }
 
-    fn open_file_dialog(&mut self) {
+    fn save_settings(&self) {
+        if let Ok(json) = serde_json::to_string_pretty(&self.config) {
+            let _ = std::fs::write("settings.json", json);
+        }
+    }
+
+    fn open_file_dialog(&mut self) { // Pass ctx here
         let now = std::time::Instant::now();
-        // Only allow opening if at least 500ms has passed since the last one
         if now.duration_since(self.last_dialog_time) > std::time::Duration::from_millis(500) {
             self.last_dialog_time = now;
             if !self.is_dialog_open {
                 self.is_dialog_open = true;
 
                 let sender = self.dialog_tx.clone();
+
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
                         .add_filter("Zip files", &["zip"])
                         .pick_file();
+
                     let _ = sender.send(file);
                 });
             }
@@ -204,7 +307,7 @@ impl MangaReader {
 
     fn load_texture(&self, img: DynamicImage, i:usize, ctx: &egui::Context) -> Option<egui::TextureHandle> {
         let resize_start = Instant::now();
-        let filter = self.resize_method.to_filter();
+        let filter = self.config.resize_method.to_filter();
         let screen_size = ctx.content_rect().size();
         let h = screen_size.y as u32;
         let w = img.width() as f32 * (screen_size.y / img.height() as f32);
@@ -402,62 +505,95 @@ impl MangaReader {
 
 impl eframe::App for MangaReader {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut action_to_run = MangaAction::None;
 
-        // Fullscreen Toggle (Enter Key)
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl) {
-            self.is_fullscreen = !self.is_fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        // REBINDING LOGIC
+        if let Some(action_name) = self.binding_action.clone() {
+            ctx.input(|i| {
+                for key in egui::Key::ALL {
+                    // Check if a key is pressed and it's NOT just a modifier key alone
+                    if i.key_pressed(*key) {
+                        let new_shortcut = Shortcut {
+                            key: *key,
+                            ctrl: i.modifiers.ctrl,
+                            alt: i.modifiers.alt,
+                            shift: i.modifiers.shift,
+                        };
+
+                        match action_name.as_str() {
+                            "Next Page" => self.config.keys.next_page = new_shortcut,
+                            "Previous Page" => self.config.keys.prev_page = new_shortcut,
+                            "Next File" => self.config.keys.next_file = new_shortcut,
+                            "Previous File" => self.config.keys.prev_file = new_shortcut,
+                            "Fullscreen" => self.config.keys.fullscreen = new_shortcut,
+                            "View Mode" => self.config.keys.view_mode = new_shortcut,
+                            "Open File" => self.config.keys.open_file = new_shortcut,
+                            _ => {}
+                        }
+                        self.binding_action = None;
+                        self.save_settings(); // Save to JSON immediately
+                    }
+                }
+            });
+        }
+        // PART B: EXECUTION LOGIC
+        else {
+            ctx.input(|i| {
+                let keys = self.config.keys;
+
+                // Helper to check if a shortcut is triggered
+                let is_triggered = |s: &Shortcut| {
+                    i.key_pressed(s.key) && i.modifiers.ctrl == s.ctrl &&
+                        i.modifiers.alt == s.alt && i.modifiers.shift == s.shift
+                };
+
+                if is_triggered(&keys.next_page) { action_to_run = MangaAction::NextPage; }
+                if is_triggered(&keys.prev_page) { action_to_run = MangaAction::PrevPage; }
+                if is_triggered(&keys.next_file) { action_to_run = MangaAction::NextFile; }
+                if is_triggered(&keys.prev_file) { action_to_run = MangaAction::PrevFile;}
+                if is_triggered(&keys.fullscreen) { action_to_run = MangaAction::FullScreen; }
+                if is_triggered(&keys.view_mode) { action_to_run = MangaAction::ViewMode; }
+                if is_triggered(&keys.open_file) { action_to_run = MangaAction::OpenFile; }
+            });
         }
 
-        // Toggle Page Shift (Enter Key)
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.ctrl) {
-            self.is_shifted = !self.is_shifted;
+        match action_to_run {
+            MangaAction::NextPage => self.next_page(ctx),
+            MangaAction::PrevPage => self.prev_page(ctx),
+            MangaAction::NextFile => self.next_zip(ctx),
+            MangaAction::PrevFile => self.prev_zip(ctx),
+            MangaAction::FullScreen => {
+                self.is_fullscreen = !self.is_fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            },
+            MangaAction::ViewMode => {
+                self.is_shifted = !self.is_shifted;
 
-            // Adjust current_index to keep the view consistent
-            if self.is_shifted {
-                // If we were at 0, move to 1. Otherwise, ensure we land on an odd index.
-                if self.current_index == 0 { self.current_index = 0; }
-                else if self.current_index % 2 == 0 { self.current_index += 1; }
-            } else {
-                // Return to even index alignment
-                self.current_index = self.current_index.saturating_sub(1);
-                if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
-            }
+                // Adjust current_index to keep the view consistent
+                if self.is_shifted {
+                    // If we were at 0, move to 1. Otherwise, ensure we land on an odd index.
+                    if self.current_index == 0 { self.current_index = 0; }
+                    else if self.current_index % 2 == 0 { self.current_index += 1; }
+                } else {
+                    // Return to even index alignment
+                    self.current_index = self.current_index.saturating_sub(1);
+                    if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
+                }
 
-            self.textures = self.load_pair(self.current_index, ctx);
-            let msg = if self.is_shifted { "Mode: Cover + Spreads" } else { "Mode: Standard Pairs" };
-            self.show_fading_error(msg); // Reusing your error logic to show the mode change
+                self.textures = self.load_pair(self.current_index, ctx);
+                let msg = if self.is_shifted { "Mode: Cover + Spreads" } else { "Mode: Standard Pairs" };
+                self.show_fading_error(msg); // Reusing your error logic to show the mode change
+            },
+            MangaAction::OpenFile => self.open_file_dialog(),
+            MangaAction::None => {},
         }
 
         // File Dialog Result
         if let Ok(result) = self.dialog_rx.try_recv() {
+            self.is_dialog_open = false;
             if let Some(path) = result {
                 self.load_zip(path, ctx, false);
             }
-        }
-
-        // KEYBOARD NAVIGATION (Right-to-Left Flow)
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::A)) {
-            self.next_page(ctx);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::D)) {
-            self.prev_page(ctx);
-        }
-
-        // New: Home and End key support
-        if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
-            self.go_to_first_page(ctx);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::End)) {
-            self.go_to_last_page(ctx);
-        }
-
-        // Next/Prev file loading
-        if ctx.input(|i| (i.key_pressed(egui::Key::ArrowLeft) && i.modifiers.ctrl) || (i.key_pressed(egui::Key::A) && i.modifiers.ctrl) ) {
-            self.next_zip(ctx);
-        }
-        if ctx.input(|i| (i.key_pressed(egui::Key::ArrowRight) && i.modifiers.ctrl) || (i.key_pressed(egui::Key::D) && i.modifiers.ctrl) ) {
-            self.prev_zip(ctx);
         }
 
         // INSTANT STATE-BASED SCROLLING
@@ -480,8 +616,120 @@ impl eframe::App for MangaReader {
             self.can_scroll = true;
         }
 
+        if self.config.show_settings {
+            egui::SidePanel::right("settings_panel")
+                .resizable(true) // Enable mouse dragging
+                .default_width(self.config.settings_width)
+                .width_range(150.0..=500.0) // Constraints
+                .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(60)).inner_margin(10.0))
+                .show(ctx, |ui| {
+                    // Update the stored width based on user dragging
+                    self.config.settings_width = ui.available_width();
+
+                    ui.add_space(10.0);
+                    ui.vertical_centered(|ui| {
+                        ui.heading(
+                            egui::RichText::new("Settings")
+                                .color(egui::Color32::from_gray(200)) // Example: Orange
+                                .strong()
+                        );
+                    });
+                    ui.add_space(10.0);
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        ui.add_space(10.0);
+
+                        // [Open File] Button
+                        if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("📂 Open File")).clicked() {
+                            self.open_file_dialog();
+                        }
+
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Image Scaling Algorithm:").color(egui::Color32::from_gray(200)).size(20.0).strong());
+                        ui.separator();
+                        let visuals = ui.visuals_mut();
+                        visuals.selection.bg_fill = egui::Color32::BLACK;
+                        visuals.override_text_color = Some(egui::Color32::from_gray(200));
+
+                        let mut changed = false;
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (Best)")).clicked();
+
+                        if changed {
+                            self.reset_buffer();
+                            self.textures = self.load_pair(self.current_index, ctx);
+                            self.save_settings(); // Save when algorithm changes
+                        }
+
+                        ui.add_space(20.0);
+
+                        ui.collapsing("Keyboard Shortcuts", |ui| {
+                            egui::Grid::new("key_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
+                                ui.label("Next Page:");
+                                render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action);
+                                ui.end_row();
+                                ui.label("Previous Page:");
+                                render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action);
+                                ui.end_row();
+                                ui.label("Next File:");
+                                render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action);
+                                ui.end_row();
+                                ui.label("Previous File:");
+                                render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action);
+                                ui.end_row();
+                                ui.label("Toggle Fullscreen:");
+                                render_binding_button(ui, "Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
+                                ui.end_row();
+                                ui.label("Odd/Even View Mode:");
+                                render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
+                                ui.end_row();
+                            });
+                        });
+
+                        // Helper function to keep the UI code clean
+                        fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<String>) {
+                            let is_binding = binding.as_deref() == Some(id);
+                            let text = if is_binding { "Listening...".to_string() } else { shortcut.format() };
+
+                            if ui.button(egui::RichText::new(text).color(egui::Color32::from_gray(60))).clicked() {
+                                *binding = Some(id.to_string());
+                            }
+                        }
+                    });
+                });
+        }
+
+        // This allows opening/closing the settings
+        let screen_rect = ctx.content_rect();
+        let button_height = 200.0;
+
+        // Calculate X position based on whether panel is open
+        let x_pos = if self.config.show_settings {
+            screen_rect.max.x - self.config.settings_width - 25.0
+        } else {
+            screen_rect.max.x - 25.0
+        };
+
+        // Calculate Y position to center the 200px button vertically
+        let y_pos = screen_rect.center().y - (button_height / 2.0);
+
+        egui::Area::new(egui::Id::new("settings_toggle"))
+            .fixed_pos([x_pos, y_pos])
+            .show(ctx, |ui| {
+                let text = if self.config.show_settings { "▶" } else { "◀" };
+
+                // We use add_sized to force the 200px height
+                let toggle_btn = egui::Button::new(egui::RichText::new(text).size(20.0));
+                if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
+                    self.config.show_settings = !self.config.show_settings;
+                }
+            });
+
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(40)))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
 
@@ -512,17 +760,17 @@ impl eframe::App for MangaReader {
                         }
                     }
                 } else {
-                    // --- THE START SCREEN ---
+                    // the start screen
                     ui.centered_and_justified(|ui| {
-                        ui.label(egui::RichText::new("Click anywhere to open a Zip file\n(Press Enter to toggle Fullscreen Mode)")
-                            .heading()
-                            .color(egui::Color32::GRAY));
+                        let start_btn = egui::Button::new(
+                            egui::RichText::new("Click anywhere to open a Zip file")
+                                .size(20.0)
+                                .color(egui::Color32::from_gray(200))
+                        ).fill(egui::Color32::from_gray(40));
+                        if ui.add_sized(ctx.content_rect().size(), start_btn).clicked() {
+                            self.open_file_dialog();
+                        }
                     });
-
-                    // If we are in the start screen, any click on the panel opens the dialog
-                    if ui.input(|i| i.pointer.any_click()) {
-                        self.open_file_dialog();
-                    }
                 }
 
             // --- THE BACKGROUND CLICK CHECK (When Zip is Open) ---
@@ -596,10 +844,10 @@ impl eframe::App for MangaReader {
                 let elapsed = start_time.elapsed().as_secs_f32();
                 if elapsed < 2.0 {
                     let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
-
+                    let padding = if self.config.show_settings { -30.0 - self.config.settings_width } else { -15.0 };
                     egui::Window::new("page_info")
-                        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
-                        .frame(egui::Frame::NONE.fill(egui::Color32::TRANSPARENT)) // No background box
+                        .anchor(egui::Align2::RIGHT_TOP, [padding, 10.0])
+                        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgba_unmultiplied(60,60,60,(opacity*255.0) as u8)).inner_margin(5.0).rounding(5.0)) // No background box
                         .title_bar(false)
                         .resizable(false)
                         .collapsible(false)
@@ -610,7 +858,7 @@ impl eframe::App for MangaReader {
                                 let page_text = format!("{} / {}", self.current_index + 1, self.image_files.len());
                                 ui.label(egui::RichText::new(page_text)
                                     .color(egui::Color32::from_white_alpha((200.0 * opacity) as u8))
-                                    .size(24.0) // Much larger font
+                                    .size(22.0) // Much larger font
                                     .strong());
                             });
                         });
@@ -623,23 +871,8 @@ impl eframe::App for MangaReader {
 
         // Keep preloading buffers
         self.update_buffers(ctx);
-
-        egui::Window::new("Settings")
-            .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
-            .collapsible(true)
-            .show(ctx, |ui| {
-                ui.label("Resizing Method:");
-                let mut changed = false;
-
-                changed |= ui.selectable_value(&mut self.resize_method, ResizeMethod::Nearest, "Nearest (Fastest)").clicked();
-                changed |= ui.selectable_value(&mut self.resize_method, ResizeMethod::Triangle, "Bilinear").clicked();
-                changed |= ui.selectable_value(&mut self.resize_method, ResizeMethod::CatmullRom, "Bicubic").clicked();
-                changed |= ui.selectable_value(&mut self.resize_method, ResizeMethod::Lanczos3, "Lanczos3 (Best)").clicked();
-
-                if changed {
-                    // Reload images with the new filter
-                    self.textures = self.load_pair(self.current_index, ctx);
-                }
-            });
+    }
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_settings();
     }
 }

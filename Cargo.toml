@@ -1,0 +1,20 @@
+[package]
+name = "LoliReader"
+version = "0.1.0"
+edition = "2024"
+
+[profile.maxperf]
+inherits = "release"
+opt-level = 3        # Enable maximum optimizations
+lto = "fat"          # Perform full link-time optimization (across all crates)
+codegen-units = 1    # Maximize optimization time at the cost of compilation time
+panic = "abort"      # Reduce binary size and improve performance by killing on panic
+strip = "symbols"    # Strip symbols to make the binary smaller (optional)
+
+[dependencies]
+windows = { version = "0.62.2", features = ["Win32_UI_Shell"] }
+eframe = "0.33.3" # Latest GUI framework
+egui = "0.33.3"
+rfd = "0.17.2"    # Native file dialogs
+zip = "7.4.0"
+image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp"] }

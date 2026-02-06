@@ -9,6 +9,7 @@ use std::time::{Instant};
 use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::StrCmpLogicalW;
 use std::os::windows::ffi::OsStrExt;
+use egui::{Rect};
 use image::DynamicImage;
 
 fn main() -> eframe::Result<()> {
@@ -20,7 +21,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Manga Reader",
+        "Loli Manga Reader - Productivity",
         options,
         Box::new(|cc| Ok(Box::new(MangaReader::new(cc)))),
     )
@@ -60,7 +61,6 @@ struct MangaReader {
     dialog_rx: Receiver<Option<PathBuf>>,
     dialog_tx: Sender<Option<PathBuf>>,
     page_indicator_time: Option<Instant>,
-    was_image_clicked: bool,
     last_dialog_time: std::time::Instant,
     is_dialog_open: bool,
     zip_name_display: Option<(String, Instant)>,
@@ -86,7 +86,6 @@ impl MangaReader {
             is_fullscreen: false,
             can_scroll: true,
             page_indicator_time: None,
-            was_image_clicked: false,
             last_dialog_time: Instant::now(),
             is_dialog_open: false,
             zip_name_display: None,
@@ -230,6 +229,7 @@ impl MangaReader {
             println!("img_{:?}", i);
             println!("----------------------------------");
         }
+
         Some(ctx.load_texture(
             format!("img_{}", i),
             color_img,
@@ -260,8 +260,8 @@ impl MangaReader {
                 self.show_fading_error("Zip contains no images.");
             } else {
                 // Reset buffer when loading another zip
-                self.buffer_next = [None, None];
-                self.buffer_prev = [None, None];
+                self.reset_buffer();
+                self.current_index = 0;
 
                 self.scan_folder(&path);
                 self.zip_path = Some(path.clone());
@@ -273,41 +273,7 @@ impl MangaReader {
                 }
 
                 self.image_files = images;
-                // If moving backward, start at the last possible pair
-                self.current_index = if start_at_end {
-                    let last = self.image_files.len().saturating_sub(1);
-                    if self.is_shifted {
-                        // Logic to find the last odd-starting pair
-                        ((last.saturating_sub(1) / 2) * 2) + 1
-                    } else {
-                        (last / 2) * 2
-                    }
-                } else {
-                    0
-                };
-                self.load_images(ctx);
-            }
-        }
-    }
-
-    fn load_images(&mut self, ctx: &egui::Context) {
-        self.textures = [None, None];
-        for i in 0..2 {
-            if let Some(filename) = self.image_files.get(self.current_index + i) {
-                if let Some(path) = &self.zip_path {
-                    if let Ok(f) = File::open(path) {
-                        if let Ok(mut arc) = zip::ZipArchive::new(f) {
-                            if let Ok(mut zf) = arc.by_name(filename) {
-                                let mut buf = Vec::new();
-                                if zf.read_to_end(&mut buf).is_ok() {
-                                    if let Ok(img) = image::load_from_memory(&buf) {
-                                        self.textures[i] = self.load_texture(img, i, ctx);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                self.textures = self.load_pair(self.current_index, ctx);
             }
         }
     }
@@ -376,7 +342,7 @@ impl MangaReader {
             if pos > 0 {
                 let prev_path = self.all_zips_in_folder[pos - 1].clone();
                 // We pass 'true' to load_zip so it knows to start at the end of the new file
-                self.load_zip(prev_path, ctx, true);
+                self.load_zip(prev_path, ctx, false);
             } else {
                 self.show_fading_error("No previous zip files in folder.");
             }
@@ -387,7 +353,7 @@ impl MangaReader {
         if !self.image_files.is_empty() && self.current_index != 0 {
             self.reset_buffer();
             self.current_index = 0;
-            self.load_images(ctx);
+            self.textures = self.load_pair(self.current_index, ctx);
             self.page_indicator_time = Some(Instant::now());
         }
     }
@@ -399,7 +365,7 @@ impl MangaReader {
             if self.current_index != last_idx {
                 self.reset_buffer();
                 self.current_index = last_idx;
-                self.load_images(ctx);
+                self.textures = self.load_pair(self.current_index, ctx);
                 self.page_indicator_time = Some(Instant::now());
             }
         }
@@ -408,6 +374,29 @@ impl MangaReader {
     fn reset_buffer(&mut self) {
         self.buffer_prev = [None, None];
         self.buffer_next = [None, None];
+    }
+
+    fn image_click_action(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context) {
+        ui.allocate_ui_at_rect(rect, |ui| {
+            // 1. Create an invisible interaction area for the whole half
+            let resp = ui.interact(rect, ui.id().with(hit_id), egui::Sense::click());
+            if resp.clicked() {
+                if is_next {
+                    self.next_page(ctx);
+                } else {
+                    self.prev_page(ctx);
+                }
+            }
+
+            // 2. Render the image on top
+            ui.centered_and_justified(|ui| {
+                if let Some(tex) = &self.textures[tex_index] {
+                    ui.add(egui::Image::new(tex)
+                        .fit_to_exact_size(rect.size())
+                        .maintain_aspect_ratio(true));
+                }
+            });
+        });
     }
 }
 
@@ -435,7 +424,7 @@ impl eframe::App for MangaReader {
                 if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
             }
 
-            self.load_images(ctx);
+            self.textures = self.load_pair(self.current_index, ctx);
             let msg = if self.is_shifted { "Mode: Cover + Spreads" } else { "Mode: Standard Pairs" };
             self.show_fading_error(msg); // Reusing your error logic to show the mode change
         }
@@ -496,7 +485,7 @@ impl eframe::App for MangaReader {
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
 
-                // Create a 'Response' for the entire background area first
+                // Create a 'Response' for the entire background area first,
                 // but we check it at the END of the code.
                 let bg_response = ui.interact(rect, ui.id().with("bg"), egui::Sense::click());
 
@@ -504,61 +493,14 @@ impl eframe::App for MangaReader {
                     // Show single image on center if in shifted mode
                     if self.is_shifted && self.current_index == 0 {
                         // --- STANDALONE COVER VIEW ---
-                        ui.allocate_ui_at_rect(rect, |ui| {
-                            let resp = ui.interact(rect, ui.id().with("cover_hit"), egui::Sense::click());
-                            if resp.clicked() { self.next_page(ctx); }
-
-                            ui.centered_and_justified(|ui| {
-                                if let Some(tex) = &self.textures[0] {
-                                    ui.add(egui::Image::new(tex)
-                                        .fit_to_exact_size(rect.size())
-                                        .maintain_aspect_ratio(true));
-                                }
-                            });
-                        });
+                        self.image_click_action(ui, rect, "cover_hit",true, 0, ctx);
                     } else {
                         let left_half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.max.y));
                         let right_half = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.min.y), rect.max);
+                        self.image_click_action(ui, left_half, "left_hit", true, 1, ctx);
+                        self.image_click_action(ui, right_half,"right_hit", false, 0, ctx);
 
-                        // --- LEFT PANE (Next) ---
-                        ui.allocate_ui_at_rect(left_half, |ui| {
-                            // 1. Create an invisible interaction area for the whole half
-                            let resp = ui.interact(left_half, ui.id().with("left_hit"), egui::Sense::click());
-                            if resp.clicked() {
-                                self.next_page(ctx);
-                                self.was_image_clicked = true;
-                            }
-
-                            // 2. Render the image on top (non-interactive so it doesn't block the area)
-                            ui.centered_and_justified(|ui| {
-                                if let Some(tex) = &self.textures[1] {
-                                    ui.add(egui::Image::new(tex)
-                                        .fit_to_exact_size(left_half.size())
-                                        .maintain_aspect_ratio(true));
-                                }
-                            });
-                        });
-
-                        // --- RIGHT PANE (Prev) ---
-                        ui.allocate_ui_at_rect(right_half, |ui| {
-                            // 1. Create an invisible interaction area for the whole half
-                            let resp = ui.interact(right_half, ui.id().with("right_hit"), egui::Sense::click());
-                            if resp.clicked() {
-                                self.prev_page(ctx);
-                                self.was_image_clicked = true;
-                            }
-
-                            // 2. Render the image on top
-                            ui.centered_and_justified(|ui| {
-                                if let Some(tex) = &self.textures[0] {
-                                    ui.add(egui::Image::new(tex)
-                                        .fit_to_exact_size(right_half.size())
-                                        .maintain_aspect_ratio(true));
-                                }
-                            });
-                        });
-
-                        // --- THE FIX: ONLY TRIGGER IF BACKGROUND WAS CLICKED ---
+                        // ONLY TRIGGER IF BACKGROUND WAS CLICKED
                         // bg_response.clicked() is true if the background was clicked.
                         // However, we only want to trigger if a specific image wasn't the target.
                         if bg_response.clicked() && !ctx.is_using_pointer() && !ctx.input(|i| i.pointer.any_down()) {
@@ -696,7 +638,7 @@ impl eframe::App for MangaReader {
 
                 if changed {
                     // Reload images with the new filter
-                    self.load_images(ctx);
+                    self.textures = self.load_pair(self.current_index, ctx);
                 }
             });
     }

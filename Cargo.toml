@@ -17,4 +17,4 @@ eframe = "0.33.3" # Latest GUI framework
 egui = "0.33.3"
 rfd = "0.17.2"    # Native file dialogs
 zip = "7.4.0"
-image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp"] }
+image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif"] }

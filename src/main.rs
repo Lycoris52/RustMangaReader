@@ -147,10 +147,7 @@ impl MangaReader {
         let idx = self.current_index;
 
         // Only update if we moved OR if the buffers were recently consumed
-        if self.last_buffered_index == Some(idx)
-            && self.buffer_next[0].is_some()
-            && (idx < 2 || self.buffer_prev[0].is_some())
-        {
+        if self.last_buffered_index == Some(idx) {
             return;
         }
 
@@ -324,12 +321,13 @@ impl MangaReader {
 
         if self.current_index + step < self.image_files.len() {
             self.current_index += step;
-            // Since the pattern changes, we fall back to load_pair for the shift
-            //self.textures = self.load_pair(self.current_index, ctx);
             // If the next pages are already in the buffer, swap them in
             if self.buffer_next[0].is_some() {
                 // Take the textures from the buffer and put them in the active slot
+                // also slide the current texture to prev buffer
+                self.buffer_prev = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_next);
+                self.buffer_next = [None, None];
             } else {
                 // Fallback if buffer wasn't ready (e.g., very fast clicking)
                 self.textures = self.load_pair(self.current_index, ctx);
@@ -346,10 +344,11 @@ impl MangaReader {
 
         if self.current_index >= step {
             self.current_index -= step;
-            //self.textures = self.load_pair(self.current_index, ctx);
             // Use the previous buffer textures
             if self.buffer_prev[0].is_some() {
+                self.buffer_next = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_prev);
+                self.buffer_prev = [None, None];
             } else {
                 self.textures = self.load_pair(self.current_index, ctx);
             }
@@ -386,6 +385,7 @@ impl MangaReader {
 
     fn go_to_first_page(&mut self, ctx: &egui::Context) {
         if !self.image_files.is_empty() && self.current_index != 0 {
+            self.reset_buffer();
             self.current_index = 0;
             self.load_images(ctx);
             self.page_indicator_time = Some(Instant::now());
@@ -397,11 +397,17 @@ impl MangaReader {
             // Find the last possible pair start (must be an even index)
             let last_idx = (self.image_files.len().saturating_sub(1) / 2) * 2;
             if self.current_index != last_idx {
+                self.reset_buffer();
                 self.current_index = last_idx;
                 self.load_images(ctx);
                 self.page_indicator_time = Some(Instant::now());
             }
         }
+    }
+
+    fn reset_buffer(&mut self) {
+        self.buffer_prev = [None, None];
+        self.buffer_next = [None, None];
     }
 }
 

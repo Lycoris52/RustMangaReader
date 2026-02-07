@@ -242,7 +242,7 @@ impl MangaReader {
 
                                         if let Some(name_str) = current_name {
                                             if name_str == filename {
-                                                break e.read().ok().map(|(bytes, _arc)| bytes);;
+                                                break e.read().ok().map(|(bytes, _arc)| bytes);
                                             } else {
                                                 cursor = e.skip().ok().and_then(|arc| arc.read_header().ok().flatten());
                                             }
@@ -371,7 +371,7 @@ impl MangaReader {
             }
             "cbr" | "rar" => {
                 self.source_mode = SourceMode::Rar;
-                if let Ok(mut archive) = unrar::Archive::new(&path).open_for_listing() {
+                if let Ok(archive) = unrar::Archive::new(&path).open_for_listing() {
                     for entry in archive {
                         if let Ok(e) = entry {
                             // Convert Option<&str> to String safely

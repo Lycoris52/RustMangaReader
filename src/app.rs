@@ -34,6 +34,7 @@ pub struct MangaReader {
     is_shifted: bool,
     config: AppSettings,
     binding_action: Option<String>,
+    time_total: f32,
 }
 
 impl MangaReader {
@@ -71,6 +72,7 @@ impl MangaReader {
             is_shifted: false,
             config, // Store the loaded config here
             binding_action: None,
+            time_total: 0.0,
         }
     }
 
@@ -150,7 +152,7 @@ impl MangaReader {
         self.last_buffered_index = Some(idx);
     }
 
-    fn load_pair(&self, start_idx: usize, ctx: &egui::Context) -> [Option<egui::TextureHandle>; 2] {
+    fn load_pair(&mut self, start_idx: usize, ctx: &egui::Context) -> [Option<egui::TextureHandle>; 2] {
         let mut pair: [Option<egui::TextureHandle>; 2] = [None, None];
 
         // Check if we even have a zip file loaded
@@ -179,8 +181,14 @@ impl MangaReader {
                     let mut buffer = Vec::new();
                     if zip_file.read_to_end(&mut buffer).is_ok() {
                         // Decode image from memory
+                        let load_start = Instant::now();
                         if let Ok(img) = image::load_from_memory(&buffer) {
                             pair[i] = self.load_texture(img, i, ctx);
+                            let temp = load_start.elapsed();
+                            let elasped: f32 =  temp.as_millis() as f32;
+                            self.time_total += elasped;
+                            println!("load_time : {:?}", load_start.elapsed());
+                            println!("load_time total: {:?}", self.time_total);
                         }
                     }
                 }
@@ -192,24 +200,38 @@ impl MangaReader {
     fn load_texture(&self, img: DynamicImage, i:usize, ctx: &egui::Context) -> Option<egui::TextureHandle> {
         let resize_start = Instant::now();
         let filter = self.config.resize_method.to_filter();
-        let screen_size = ctx.content_rect().size();
-        let h = screen_size.y as u32;
-        let w = img.width() as f32 * (screen_size.y / img.height() as f32);
-        let processed_img = img.resize(w as u32, h, filter);
-        let _resize_time = resize_start.elapsed();
+        let processed_img = if let Some(filter_type) = filter {
+            let screen_size = ctx.content_rect();
+            let target_h = screen_size.height() as u32;
+            let aspect_ratio = img.width() as f32 / img.height() as f32;
+            let target_w = (target_h as f32 * aspect_ratio) as u32;
+            img.resize(target_w, target_h, filter_type)
+        } else {
+            img // No resizing needed, return original
+        };
 
+        let _resize_time = resize_start.elapsed();
         let process_start = Instant::now();
+
         let size = [processed_img.width() as _, processed_img.height() as _];
-        let color_img = egui::ColorImage::from_rgba_unmultiplied(
-            size,
-            processed_img.to_rgba8().as_flat_samples().as_slice(),
-        );
+        let color_img = if self.config.transparency_support {
+            egui::ColorImage::from_rgba_unmultiplied(
+                size,
+                processed_img.to_rgba8().as_flat_samples().as_slice(),
+            )
+        } else {
+            egui::ColorImage::from_rgb(
+                size,
+                processed_img.to_rgb8().as_raw()
+            )
+        };
+
         let _process_time = process_start.elapsed();
 
         #[cfg(debug_assertions)]
         {
             println!("----------------------------------");
-            println!("resize_time: {:?} ({:?}, {:?})", _resize_time, w, h);
+            println!("resize_time: {:?}", _resize_time);
             println!("process_time: {:?}", _process_time);
             println!("total: {:?}", _process_time + _resize_time);
             println!("filter: {:?}", filter);
@@ -543,16 +565,25 @@ impl eframe::App for MangaReader {
                         visuals.override_text_color = Some(egui::Color32::from_gray(200));
 
                         let mut changed = false;
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Balance)")).clicked();
                         changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
                         changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear")).clicked();
                         changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (Best)")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality)")).clicked();
 
                         if changed {
                             self.reset_buffer();
                             self.textures = self.load_pair(self.current_index, ctx);
                             self.save_settings(); // Save when algorithm changes
                         }
+
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Others:").color(egui::Color32::from_gray(200)).size(20.0).strong());
+                        ui.separator();
+                        ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
+                            .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
+                        ui.checkbox(&mut self.config.skip_folder, "Load Next Folder on Last File")
+                            .on_hover_text("Normally the reader show error when trying to view next file on last file. Enable this will have reader trying to scan next folder.");
 
                         ui.add_space(20.0);
 

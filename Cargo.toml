@@ -6,7 +6,7 @@ edition = "2024"
 [profile.dev]
 debug = true
 
-[profile.maxperf]
+[profile.master]
 inherits = "release"
 opt-level = 3        # Enable maximum optimizations
 lto = "fat"          # Perform full link-time optimization (across all crates)

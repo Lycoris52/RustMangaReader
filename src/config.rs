@@ -2,19 +2,21 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum ResizeMethod {
-    Nearest,
-    Triangle,   // Bilinear
+    None,       // Use original resolution
+    Nearest,    // Nearest Neighbor (fastest)
+    Triangle,   // Bilinear (Moderate)
     CatmullRom, // Bicubic
     Lanczos3,   // High Quality
 }
 
 impl ResizeMethod {
-    pub fn to_filter(self) -> image::imageops::FilterType {
+    pub fn to_filter(self) -> Option<image::imageops::FilterType> {
         match self {
-            ResizeMethod::Nearest => image::imageops::FilterType::Nearest,
-            ResizeMethod::Triangle => image::imageops::FilterType::Triangle,
-            ResizeMethod::CatmullRom => image::imageops::FilterType::CatmullRom,
-            ResizeMethod::Lanczos3 => image::imageops::FilterType::Lanczos3,
+            ResizeMethod::None => None,
+            ResizeMethod::Nearest => Some(image::imageops::FilterType::Nearest),
+            ResizeMethod::Triangle => Some(image::imageops::FilterType::Triangle),
+            ResizeMethod::CatmullRom => Some(image::imageops::FilterType::CatmullRom),
+            ResizeMethod::Lanczos3 => Some(image::imageops::FilterType::Lanczos3),
         }
     }
 }
@@ -95,6 +97,7 @@ pub struct AppSettings {
     pub settings_width: f32,
     pub show_settings: bool,
     pub skip_folder: bool,
+    pub transparency_support: bool,
     pub keys: KeyConfig,
 }
 
@@ -104,7 +107,8 @@ impl Default for AppSettings {
             resize_method: ResizeMethod::Triangle,
             settings_width: 250.0,
             show_settings: false,
-            skip_folder: false,
+            skip_folder: true,
+            transparency_support: false,
             keys: KeyConfig::default(),
         }
     }

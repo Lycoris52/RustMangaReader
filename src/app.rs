@@ -1,4 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use eframe::egui;
 use std::fs::{self, File};
 use std::io::Read;
@@ -246,7 +245,7 @@ impl MangaReader {
         ))
     }
 
-    fn load_zip(&mut self, path: PathBuf, ctx: &egui::Context, start_at_end: bool) {
+    fn load_zip(&mut self, path: PathBuf, ctx: &egui::Context) {
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(_) => return,
@@ -338,7 +337,7 @@ impl MangaReader {
             if pos + 1 < self.all_zips_in_folder.len() {
                 // There is a next file
                 let next_path = self.all_zips_in_folder[pos + 1].clone();
-                self.load_zip(next_path, ctx, false);
+                self.load_zip(next_path, ctx);
             } else {
                 // NO MORE FILES - This is the fix
                 self.show_fading_error("No more zip files in folder.");
@@ -351,7 +350,7 @@ impl MangaReader {
             if pos > 0 {
                 let prev_path = self.all_zips_in_folder[pos - 1].clone();
                 // We pass 'true' to load_zip so it knows to start at the end of the new file
-                self.load_zip(prev_path, ctx, false);
+                self.load_zip(prev_path, ctx);
             } else {
                 self.show_fading_error("No previous zip files in folder.");
             }
@@ -504,7 +503,7 @@ impl eframe::App for MangaReader {
         if let Ok(result) = self.dialog_rx.try_recv() {
             self.is_dialog_open = false;
             if let Some(path) = result {
-                self.load_zip(path, ctx, false);
+                self.load_zip(path, ctx);
             }
         }
 
@@ -777,7 +776,7 @@ impl eframe::App for MangaReader {
                         let padding = if self.config.show_settings { -30.0 - self.config.settings_width } else { -15.0 };
                         egui::Window::new("page_info")
                             .anchor(egui::Align2::RIGHT_TOP, [padding, 10.0])
-                            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgba_unmultiplied(60,60,60,(opacity*255.0) as u8)).inner_margin(5.0).rounding(5.0)) // No background box
+                            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgba_unmultiplied(60,60,60,(opacity*255.0) as u8)).inner_margin(5.0).corner_radius(5.0)) // No background box
                             .title_bar(false)
                             .resizable(false)
                             .collapsible(false)

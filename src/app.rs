@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use eframe::egui;
 use std::fs::{self, File};
 use std::io::Read;
@@ -191,7 +190,7 @@ impl MangaReader {
                         // Decode image from memory
                         let load_start = Instant::now();
                         if let Ok(img) = image::load_from_memory(&buffer) {
-                            pair[i] = self.load_texture(img, i, filename.clone(), ctx);
+                            pair[i] = self.load_texture(img, filename.clone(), ctx);
                             let temp = load_start.elapsed();
                             let elasped: f32 =  temp.as_millis() as f32;
                             self.time_total += elasped;
@@ -205,7 +204,7 @@ impl MangaReader {
         pair
     }
 
-    fn load_texture(&mut self, img: DynamicImage, i:usize, cache_name:String, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    fn load_texture(&mut self, img: DynamicImage, cache_name:String, ctx: &egui::Context) -> Option<egui::TextureHandle> {
         let resize_start = Instant::now();
         let filter = self.config.resize_method.to_filter();
         let processed_img = if let Some(filter_type) = filter {

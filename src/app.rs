@@ -723,7 +723,7 @@ impl eframe::App for MangaReader {
                     let elapsed = start_time.elapsed().as_secs_f32();
                     if elapsed < 3.0 {
                         let opacity = (1.0 - (elapsed / 3.0)).clamp(0.0, 1.0);
-                        let padding = if self.config.show_settings { -self.config.settings_width } else { 0.0 };
+                        let padding = if self.config.show_settings { -(self.config.settings_width/2.0)  } else { 0.0 };
                         egui::Window::new("")
                             .anchor(egui::Align2::CENTER_TOP, [padding, 120.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())
@@ -749,7 +749,7 @@ impl eframe::App for MangaReader {
 
                     if elapsed < duration {
                         let opacity = (1.0 - (elapsed / duration)).clamp(0.0, 1.0);
-                        let padding = if self.config.show_settings { -self.config.settings_width } else { 0.0 };
+                        let padding = if self.config.show_settings { -(self.config.settings_width/2.0) } else { 0.0 };
                         egui::Window::new("zip_name_overlay")
                             .anchor(egui::Align2::CENTER_TOP, [padding, 60.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())

@@ -4,11 +4,14 @@ mod config;
 mod font;
 mod app;
 
-use eframe::egui;
 use app::MangaReader;
 
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions {
+    // args[1] is the file path.
+    let args: Vec<String> = std::env::args().collect();
+    let initial_path = args.get(1).map(std::path::PathBuf::from);
+
+    let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_maximized(true)
             .with_decorations(true),
@@ -17,7 +20,9 @@ fn main() -> eframe::Result<()> {
 
     eframe::run_native(
         "Rust Manga Reader for Windows - Productivity",
-        options,
-        Box::new(|cc| Ok(Box::new(MangaReader::new(cc)))),
+        native_options,
+        Box::new(|cc| {
+            Ok(Box::new(MangaReader::new(cc, initial_path)))
+        }),
     )
 }

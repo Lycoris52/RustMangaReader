@@ -36,10 +36,11 @@ pub struct MangaReader {
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
     // for debug
     time_total: f32,
+    initial_path: Option<PathBuf>,
 }
 
 impl MangaReader {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         font::setup_custom_fonts(&_cc.egui_ctx);
         let config: AppSettings = if let Ok(data) = std::fs::read_to_string("settings.json") {
             // add |_| here to accept the error argument but ignore it
@@ -53,6 +54,7 @@ impl MangaReader {
 
         let (tx, rx) = channel();
         Self {
+            initial_path,
             zip_path: None,
             image_files: Vec::new(),
             current_index: 0,
@@ -605,6 +607,12 @@ impl eframe::App for MangaReader {
             },
             MangaAction::OpenFile => self.open_file_dialog(),
             MangaAction::None => {},
+        }
+
+        // Load file if passed as program parameter
+        if let Some(p) = self.initial_path.as_ref() {
+            self.load_zip(p.clone(), ctx);
+            self.initial_path = None;
         }
 
         // File Dialog Result

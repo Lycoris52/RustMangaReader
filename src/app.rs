@@ -103,33 +103,88 @@ impl MangaReader {
             }
         }
     }
+    /// Performs Windows-native natural alphanumeric sorting
+    pub fn windows_natural_sort(paths: &mut [PathBuf]) {
+        paths.sort_by(|a, b| {
+            // Convert OsStr to null-terminated Wide Strings (UTF-16) for Windows API
+            let a_name: Vec<u16> = a.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
+            let b_name: Vec<u16> = b.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
 
-    fn scan_folder(&mut self, current_zip: &Path) {
-        if let Some(parent) = current_zip.parent() {
-            let mut zips = Vec::new();
-            if let Ok(entries) = fs::read_dir(parent) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "zip") {
-                        zips.push(path);
-                    }
+            let result = unsafe {
+                StrCmpLogicalW(PCWSTR(a_name.as_ptr()), PCWSTR(b_name.as_ptr()))
+            };
+
+            match result {
+                r if r < 0 => std::cmp::Ordering::Less,
+                r if r > 0 => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+        });
+    }
+
+    fn scan_folder(&mut self, current_zip: &Path) -> Vec<PathBuf> {
+        let mut zips = Vec::new();
+        if let Ok(entries) = fs::read_dir(current_zip) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "zip") {
+                    zips.push(path);
                 }
             }
-            zips.sort_by(|a, b| {
-                let a_name: Vec<u16> = a.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
-                let b_name: Vec<u16> = b.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
+        }
+        Self::windows_natural_sort(&mut *zips);
+        zips
+    }
 
-                let result = unsafe {
-                    StrCmpLogicalW(PCWSTR(a_name.as_ptr()), PCWSTR(b_name.as_ptr()))
-                };
+    fn get_adjacent_directories(path_with_file_name: Option<PathBuf>) -> (Option<PathBuf>, Option<PathBuf>) {
+        // Unwrap the Option to get the actual PathBuf
+        let path = match path_with_file_name {
+            Some(p) => p,
+            None => return (None, None),
+        };
 
-                match result {
-                    r if r < 0 => std::cmp::Ordering::Less,
-                    r if r > 0 => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                }
-            });
-            self.all_zips_in_folder = zips;
+        let path = match path.parent() {
+            Some(p) => p,
+            None => return (None, None),
+        };
+
+        let root_dir = match path.parent() {
+            Some(p) => p,
+            None => return (None, None),
+        };
+
+        // Collect all valid sibling directories
+        let mut dirs: Vec<PathBuf> = fs::read_dir(root_dir)
+            .ok()
+            .map(|read_dir| {
+                read_dir
+                    .filter_map(|entry| {
+                        let p = entry.ok()?.path();
+                        // Ensure it's a directory and not a hidden file
+                        if p.is_dir() && !p.file_name()?.to_str()?.starts_with('.') {
+                            Some(p)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Sort using Windows natural alphanumeric order (test2 before test10)
+        // If you haven't added a crate, dirs.sort() works for simple cases
+        Self::windows_natural_sort(&mut *dirs);
+
+        // Find where we are
+        let current_pos = dirs.iter().position(|p| *p == path);
+
+        match current_pos {
+            Some(pos) => {
+                let prev = if pos > 0 { Some(dirs[pos - 1].clone()) } else { None };
+                let next = if pos + 1 < dirs.len() { Some(dirs[pos + 1].clone()) } else { None };
+                (prev, next)
+            }
+            None => (None, None),
         }
     }
 
@@ -242,7 +297,6 @@ impl MangaReader {
             println!("process_time: {:?}", _process_time);
             println!("total: {:?}", _process_time + _resize_time);
             println!("filter: {:?}", filter);
-            println!("img_{:?}", i);
             println!("----------------------------------");
         }
 
@@ -284,7 +338,8 @@ impl MangaReader {
                 self.texture_cache.clear();
                 self.current_index = 0;
 
-                self.scan_folder(&path);
+                self.all_zips_in_folder = self.scan_folder(&path.parent().expect("File should have a folder parent"));
+                println!("** path is :{:?}", path);
                 self.zip_path = Some(path.clone());
 
                 // Trigger the Zip Name Overlay
@@ -345,6 +400,7 @@ impl MangaReader {
         }
         self.page_indicator_time = Some(Instant::now());
     }
+
     fn next_zip(&mut self, ctx: &egui::Context) {
         if let Some(pos) = self.all_zips_in_folder.iter().position(|p| Some(p) == self.zip_path.as_ref()) {
             if pos + 1 < self.all_zips_in_folder.len() {
@@ -369,6 +425,39 @@ impl MangaReader {
             }
         }
     }
+
+    fn next_folder(&mut self, ctx: &egui::Context) {
+        let (_, next_dir) = Self::get_adjacent_directories(self.zip_path.clone());
+
+        // Check if next_dir actually exists
+        if let Some(dir) = next_dir {
+            let zips = self.scan_folder(&*dir);
+            if zips.is_empty() {
+                self.show_fading_error("No Archive found in next folder.");
+            } else {
+                self.load_zip(zips[0].clone(), ctx);
+            }
+        } else {
+            self.show_fading_error("No next directory found.");
+        }
+    }
+
+    fn prev_folder(&mut self, ctx: &egui::Context) {
+        let (prev_dir, _) = Self::get_adjacent_directories(self.zip_path.clone());
+
+        // Check if next_dir actually exists
+        if let Some(dir) = prev_dir {
+            let zips = self.scan_folder(&*dir);
+            if zips.is_empty() {
+                self.show_fading_error("No Archive found in previous folder.");
+            } else {
+                self.load_zip(zips[0].clone(), ctx);
+            }
+        } else {
+            self.show_fading_error("No previous directory found.");
+        }
+    }
+
 
     fn go_to_first_page(&mut self, ctx: &egui::Context) {
         if !self.image_files.is_empty() && self.current_index != 0 {
@@ -445,6 +534,8 @@ impl eframe::App for MangaReader {
                             "Last Page" => self.config.keys.last_page = new_shortcut,
                             "Next File" => self.config.keys.next_file = new_shortcut,
                             "Previous File" => self.config.keys.prev_file = new_shortcut,
+                            "Next Folder" => self.config.keys.next_folder = new_shortcut,
+                            "Previous Folder" => self.config.keys.prev_folder = new_shortcut,
                             "Fullscreen" => self.config.keys.fullscreen = new_shortcut,
                             "View Mode" => self.config.keys.view_mode = new_shortcut,
                             "Open File" => self.config.keys.open_file = new_shortcut,
@@ -473,6 +564,8 @@ impl eframe::App for MangaReader {
                 if is_triggered(&keys.last_page) { action_to_run = MangaAction::LastPage; }
                 if is_triggered(&keys.next_file) { action_to_run = MangaAction::NextFile; }
                 if is_triggered(&keys.prev_file) { action_to_run = MangaAction::PrevFile;}
+                if is_triggered(&keys.next_folder) { action_to_run = MangaAction::NextFolder; }
+                if is_triggered(&keys.prev_folder) { action_to_run = MangaAction::PrevFolder;}
                 if is_triggered(&keys.fullscreen) { action_to_run = MangaAction::FullScreen; }
                 if is_triggered(&keys.view_mode) { action_to_run = MangaAction::ViewMode; }
                 if is_triggered(&keys.open_file) { action_to_run = MangaAction::OpenFile; }
@@ -486,6 +579,8 @@ impl eframe::App for MangaReader {
             MangaAction::LastPage => self.go_to_last_page(ctx),
             MangaAction::NextFile => self.next_zip(ctx),
             MangaAction::PrevFile => self.prev_zip(ctx),
+            MangaAction::NextFolder => self.next_folder(ctx),
+            MangaAction::PrevFolder => self.prev_folder(ctx),
             MangaAction::FullScreen => {
                 self.is_fullscreen = !self.is_fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
@@ -594,8 +689,6 @@ impl eframe::App for MangaReader {
                         ui.separator();
                         ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
                             .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
-                        ui.checkbox(&mut self.config.skip_folder, "Load Next Folder on Last File")
-                            .on_hover_text("Normally the reader show error when trying to view next file on last file. Enable this will have reader trying to scan next folder.");
                         ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
                             .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
                         ui.add_space(20.0);
@@ -622,6 +715,12 @@ impl eframe::App for MangaReader {
                                     ui.end_row();
                                     ui.label("Previous File:");
                                     render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action);
+                                    ui.end_row();
+                                    ui.label("Next Folder:");
+                                    render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action);
+                                    ui.end_row();
+                                    ui.label("Previous Folder:");
+                                    render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action);
                                     ui.end_row();
                                     ui.label("Toggle Fullscreen:");
                                     render_binding_button(ui, "Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);

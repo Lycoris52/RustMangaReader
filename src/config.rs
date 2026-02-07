@@ -120,6 +120,7 @@ pub struct AppSettings {
     pub show_settings: bool,
     pub transparency_support: bool,
     pub enable_single_file_caching: bool,
+    pub image_delay: u64,
     pub keys: KeyConfig,
 }
 
@@ -132,6 +133,7 @@ impl Default for AppSettings {
             show_settings: false,
             transparency_support: false,
             enable_single_file_caching: true,
+            image_delay: 100,
             keys: KeyConfig::default(),
         }
     }

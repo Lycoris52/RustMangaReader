@@ -8,8 +8,10 @@ mod utils;
 use app::MangaReader;
 
 fn main() -> eframe::Result<()> {
-    let icon = image::open("src/assets/icon256.png")
-        .expect("Failed to open icon")
+    let icon_data = include_bytes!("assets/icon256.png");
+
+    let icon = image::load_from_memory(icon_data)
+        .expect("Failed to load embedded icon")
         .to_rgba8();
     let (width, height) = icon.dimensions();
 

@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::time::{Instant};
+use std::time::{Duration, Instant};
 use egui::{Rect};
 use image::DynamicImage;
 use pdfium_render::prelude::Pixels;
@@ -35,6 +35,7 @@ pub struct MangaReader {
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
+    last_image_switch_time: Instant,
 }
 
 impl MangaReader {
@@ -75,6 +76,7 @@ impl MangaReader {
             binding_action: None,
             texture_cache: Default::default(),
             source_mode: SourceMode::Zip,
+            last_image_switch_time: Instant::now(),
         }
     }
 
@@ -457,6 +459,11 @@ impl MangaReader {
     }
 
     fn next_page(&mut self, ctx: &egui::Context) {
+        if self.last_image_switch_time + Duration::from_millis(self.config.image_delay) > Instant::now() {
+            return;
+        } else {
+            self.last_image_switch_time = Instant::now();
+        }
         let step = if self.is_single_page() || (self.is_shifted && self.current_index == 0) { 1 } else { 2 };
 
         if self.current_index + step < self.image_files.len() {
@@ -480,6 +487,11 @@ impl MangaReader {
     }
 
     fn prev_page(&mut self, ctx: &egui::Context) {
+        if self.last_image_switch_time + Duration::from_millis(self.config.image_delay) > Instant::now() {
+            return;
+        } else {
+            self.last_image_switch_time = Instant::now();
+        }
         let step = if self.is_single_page() || (self.is_shifted && self.current_index == 1) { 1 } else { 2 };
 
         if self.current_index >= step {
@@ -820,6 +832,8 @@ impl eframe::App for MangaReader {
                             .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
                         ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
                             .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
+                        ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)
+                            .text("Image Delay (ms)")).on_hover_text("Delay time in between before the next image shown. Useful when holding next/prev image button.");
                         ui.add_space(20.0);
 
                         egui::CollapsingHeader::new(egui::RichText::new("Key Config").color(egui::Color32::from_gray(200)).size(20.0).strong())

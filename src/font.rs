@@ -6,7 +6,7 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
     // include the bytes of a .ttf file in your binary:
     fonts.font_data.insert(
         "notosan".to_owned(),
-        Arc::from(egui::FontData::from_static(include_bytes!("../NotoSansJP-Regular.ttf"))),
+        Arc::from(egui::FontData::from_static(include_bytes!("assets/NotoSansJP-Regular.ttf"))),
     );
 
     // Put notosan top priority for both Proportional and Monospace

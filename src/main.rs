@@ -3,6 +3,7 @@
 mod config;
 mod font;
 mod app;
+mod utils;
 
 use app::MangaReader;
 

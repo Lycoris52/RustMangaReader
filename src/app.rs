@@ -4,13 +4,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Instant};
-use windows::core::PCWSTR;
-use windows::Win32::UI::Shell::StrCmpLogicalW;
-use std::os::windows::ffi::OsStrExt;
 use egui::{Rect};
 use image::DynamicImage;
-use crate::config::{AppSettings, MangaAction, ResizeMethod, Shortcut};
+use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut};
 use crate::font;
+use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 
 pub struct MangaReader {
     zip_path: Option<PathBuf>,
@@ -34,9 +32,8 @@ pub struct MangaReader {
     config: AppSettings,
     binding_action: Option<String>,
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
-    // for debug
-    time_total: f32,
     initial_path: Option<PathBuf>,
+    is_folder_mode: bool,
 }
 
 impl MangaReader {
@@ -76,7 +73,7 @@ impl MangaReader {
             config, // Store the loaded config here
             binding_action: None,
             texture_cache: Default::default(),
-            time_total: 0.0,
+            is_folder_mode: false,
         }
     }
 
@@ -86,18 +83,17 @@ impl MangaReader {
         }
     }
 
-    fn open_file_dialog(&mut self) { // Pass ctx here
+    fn open_file_dialog(&mut self) {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_dialog_time) > std::time::Duration::from_millis(500) {
             self.last_dialog_time = now;
             if !self.is_dialog_open {
                 self.is_dialog_open = true;
-
                 let sender = self.dialog_tx.clone();
 
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
-                        .add_filter("Zip files", &["zip"])
+                        .add_filter("Manga Files", &["zip", "jpg", "jpeg", "png", "webp", "bmp"])
                         .pick_file();
 
                     let _ = sender.send(file);
@@ -105,38 +101,25 @@ impl MangaReader {
             }
         }
     }
-    /// Performs Windows-native natural alphanumeric sorting
-    pub fn windows_natural_sort(paths: &mut [PathBuf]) {
-        paths.sort_by(|a, b| {
-            // Convert OsStr to null-terminated Wide Strings (UTF-16) for Windows API
-            let a_name: Vec<u16> = a.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
-            let b_name: Vec<u16> = b.file_name().unwrap_or_default().encode_wide().chain(Some(0)).collect();
 
-            let result = unsafe {
-                StrCmpLogicalW(PCWSTR(a_name.as_ptr()), PCWSTR(b_name.as_ptr()))
-            };
-
-            match result {
-                r if r < 0 => std::cmp::Ordering::Less,
-                r if r > 0 => std::cmp::Ordering::Greater,
-                _ => std::cmp::Ordering::Equal,
-            }
-        });
-    }
-
-    fn scan_folder(&mut self, current_zip: &Path) -> Vec<PathBuf> {
-        let mut zips = Vec::new();
-        if let Ok(entries) = fs::read_dir(current_zip) {
+    fn scan_folder(&mut self, current_parent: &Path) -> Vec<PathBuf> {
+        let mut items = Vec::new();
+        if let Ok(entries) = fs::read_dir(current_parent) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "zip") {
-                    zips.push(path);
+                let is_zip = path.extension().map_or(false, |ext| ext == "zip");
+                // Treat non-hidden directories as readable manga sources
+                let is_dir = path.is_dir() && !path.file_name().unwrap_or_default().to_string_lossy().starts_with('.');
+
+                if is_zip || is_dir {
+                    items.push(path);
                 }
             }
         }
-        Self::windows_natural_sort(&mut *zips);
-        zips
+        windows_natural_sort(&mut items);
+        items
     }
+
 
     fn get_adjacent_directories(path_with_file_name: Option<PathBuf>) -> (Option<PathBuf>, Option<PathBuf>) {
         // Unwrap the Option to get the actual PathBuf
@@ -175,7 +158,7 @@ impl MangaReader {
 
         // Sort using Windows natural alphanumeric order (test2 before test10)
         // If you haven't added a crate, dirs.sort() works for simple cases
-        Self::windows_natural_sort(&mut *dirs);
+        windows_natural_sort(&mut *dirs);
 
         // Find where we are
         let current_pos = dirs.iter().position(|p| *p == path);
@@ -213,47 +196,39 @@ impl MangaReader {
 
     fn load_pair(&mut self, start_idx: usize, ctx: &egui::Context) -> [Option<egui::TextureHandle>; 2] {
         let mut pair: [Option<egui::TextureHandle>; 2] = [None, None];
-
-        // Check if we even have a zip file loaded
-        let zip_path = match &self.zip_path {
+        let source_path = match &self.zip_path {
             Some(p) => p,
             None => return pair,
         };
 
-        // Open the archive once for both images to save overhead
-        let file = match File::open(zip_path) {
-            Ok(f) => f,
-            Err(_) => return pair,
-        };
-
-        let mut archive = match zip::ZipArchive::new(file) {
-            Ok(a) => a,
-            Err(_) => return pair,
+        let mut archive = if !self.is_folder_mode {
+            File::open(source_path).ok().and_then(|f| zip::ZipArchive::new(f).ok())
+        } else {
+            None
         };
 
         for i in 0..2 {
             let current_target = start_idx + i;
-
-            // Safety check for index bounds
             if let Some(filename) = self.image_files.get(current_target) {
-                // try to load from gpu cache first
                 if let Some(handle) = self.texture_cache.get(filename) {
-                    pair[i] = Option::from(handle.clone());
+                    pair[i] = Some(handle.clone());
                     continue;
                 }
-                if let Ok(mut zip_file) = archive.by_name(filename) {
-                    let mut buffer = Vec::new();
-                    if zip_file.read_to_end(&mut buffer).is_ok() {
-                        // Decode image from memory
-                        let load_start = Instant::now();
-                        if let Ok(img) = image::load_from_memory(&buffer) {
-                            pair[i] = self.load_texture(img, filename.clone(), ctx);
-                            let temp = load_start.elapsed();
-                            let elasped: f32 =  temp.as_millis() as f32;
-                            self.time_total += elasped;
-                            println!("load_time : {:?}", load_start.elapsed());
-                            println!("load_time total: {:?}", self.time_total);
-                        }
+
+                let bytes = if self.is_folder_mode {
+                    fs::read(filename).ok() // Load directly from path
+                } else if let Some(ref mut arc) = archive {
+                    arc.by_name(filename).ok().and_then(|mut f| {
+                        let mut b = Vec::new();
+                        f.read_to_end(&mut b).ok().map(|_| b)
+                    })
+                } else {
+                    None
+                };
+
+                if let Some(buffer) = bytes {
+                    if let Ok(img) = image::load_from_memory(&buffer) {
+                        pair[i] = self.load_texture(img, filename.clone(), ctx);
                     }
                 }
             }
@@ -313,46 +288,80 @@ impl MangaReader {
         Some(handle)
     }
 
-    fn load_zip(&mut self, path: PathBuf, ctx: &egui::Context) {
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
+    fn load_source(&mut self, path: PathBuf, ctx: &egui::Context) {
+        let mut target_path = path.clone();
+        let mut start_at_filename: Option<String> = None;
 
-        if let Ok(mut archive) = zip::ZipArchive::new(file) {
-            let mut images = Vec::new();
-            let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga"];
-            for i in 0..archive.len() {
-                if let Ok(f) = archive.by_index(i) {
-                    let name = f.name().to_lowercase();
-                    if exts.iter().any(|&e| name.ends_with(&format!(".{}", e))) {
-                        images.push(f.name().to_string());
+        // Check if it's an image file instead of a zip
+        let is_zip = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "zip");
+
+        if path.is_file() && !is_zip {
+            // Pivot: Use the folder containing this image as the source
+            if let Some(parent) = path.parent() {
+                start_at_filename = Some(path.to_string_lossy().to_string());
+                target_path = parent.to_path_buf();
+            }
+        }
+
+        let mut images = Vec::new();
+        let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga"];
+
+        if target_path.is_dir() {
+            // --- FOLDER MODE ---
+            if let Ok(entries) = fs::read_dir(&target_path) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() && exts.iter().any(|&e| p.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == e)) {
+                        images.push(p.to_string_lossy().to_string());
                     }
                 }
+                self.is_folder_mode = true;
             }
-            images.sort();
-
-            if images.is_empty() {
-                self.show_fading_error("Zip contains no images.");
-            } else {
-                // Reset buffer when loading another zip
-                self.reset_buffer();
-                self.texture_cache.clear();
-                self.current_index = 0;
-
-                self.all_zips_in_folder = self.scan_folder(&path.parent().expect("File should have a folder parent"));
-                println!("** path is :{:?}", path);
-                self.zip_path = Some(path.clone());
-
-                // Trigger the Zip Name Overlay
-                if let Some(file_name) = path.file_name() {
-                    let name_str = file_name.to_string_lossy().to_string();
-                    self.zip_name_display = Some((name_str, Instant::now()));
+        } else if is_zip {
+            // --- ZIP MODE ---
+            let file = match File::open(&target_path) {
+                Ok(f) => f,
+                Err(_) => return,
+            };
+            if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                for i in 0..archive.len() {
+                    if let Ok(f) = archive.by_index(i) {
+                        let name = f.name().to_lowercase();
+                        if exts.iter().any(|&e| name.ends_with(&format!(".{}", e))) {
+                            images.push(f.name().to_string());
+                        }
+                    }
                 }
-
-                self.image_files = images;
-                self.textures = self.load_pair(self.current_index, ctx);
+                self.is_folder_mode = false;
             }
+        }
+
+        windows_natural_sort_strings(&mut images);
+
+        if images.is_empty() {
+            self.show_fading_error("No images found in selection.");
+        } else {
+            self.reset_buffer();
+            self.texture_cache.clear();
+
+            // If we opened a specific image, find its index in the sorted list
+            self.current_index = if let Some(target_name) = start_at_filename {
+                images.iter().position(|r| r == &target_name).unwrap_or(0)
+            } else {
+                0
+            };
+
+            self.zip_path = Some(target_path.clone());
+            self.image_files = images;
+
+            // Scan parent for Next/Prev file navigation
+            self.all_zips_in_folder = self.scan_folder(&target_path.parent().unwrap_or(Path::new("")));
+
+            if let Some(file_name) = target_path.file_name() {
+                self.zip_name_display = Some((file_name.to_string_lossy().to_string(), Instant::now()));
+            }
+
+            self.textures = self.load_pair(self.current_index, ctx);
         }
     }
 
@@ -361,7 +370,7 @@ impl MangaReader {
     }
 
     fn next_page(&mut self, ctx: &egui::Context) {
-        let step = if self.is_shifted && self.current_index == 0 { 1 } else { 2 };
+        let step = if self.is_single_page() || (self.is_shifted && self.current_index == 0) { 1 } else { 2 };
 
         if self.current_index + step < self.image_files.len() {
             self.current_index += step;
@@ -384,7 +393,7 @@ impl MangaReader {
     }
 
     fn prev_page(&mut self, ctx: &egui::Context) {
-        let step = if self.is_shifted && self.current_index == 1 { 1 } else { 2 };
+        let step = if self.is_single_page() || (self.is_shifted && self.current_index == 1) { 1 } else { 2 };
 
         if self.current_index >= step {
             self.current_index -= step;
@@ -408,7 +417,7 @@ impl MangaReader {
             if pos + 1 < self.all_zips_in_folder.len() {
                 // There is a next file
                 let next_path = self.all_zips_in_folder[pos + 1].clone();
-                self.load_zip(next_path, ctx);
+                self.load_source(next_path, ctx);
             } else {
                 // NO MORE FILES - This is the fix
                 self.show_fading_error("No more zip files in folder.");
@@ -421,7 +430,7 @@ impl MangaReader {
             if pos > 0 {
                 let prev_path = self.all_zips_in_folder[pos - 1].clone();
                 // We pass 'true' to load_zip so it knows to start at the end of the new file
-                self.load_zip(prev_path, ctx);
+                self.load_source(prev_path, ctx);
             } else {
                 self.show_fading_error("No previous zip files in folder.");
             }
@@ -437,7 +446,7 @@ impl MangaReader {
             if zips.is_empty() {
                 self.show_fading_error("No Archive found in next folder.");
             } else {
-                self.load_zip(zips[0].clone(), ctx);
+                self.load_source(zips[0].clone(), ctx);
             }
         } else {
             self.show_fading_error("No next directory found.");
@@ -453,7 +462,7 @@ impl MangaReader {
             if zips.is_empty() {
                 self.show_fading_error("No Archive found in previous folder.");
             } else {
-                self.load_zip(zips[0].clone(), ctx);
+                self.load_source(zips[0].clone(), ctx);
             }
         } else {
             self.show_fading_error("No previous directory found.");
@@ -488,7 +497,7 @@ impl MangaReader {
         self.buffer_next = [None, None];
     }
 
-    fn image_click_action(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context) {
+    fn create_image_rect(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context) {
         ui.allocate_ui_at_rect(rect, |ui| {
             // 1. Create an invisible interaction area for the whole half
             let resp = ui.interact(rect, ui.id().with(hit_id), egui::Sense::click());
@@ -509,6 +518,11 @@ impl MangaReader {
                 }
             });
         });
+    }
+
+
+    fn is_single_page(&self) -> bool {
+        self.config.page_view_options == PageViewOptions::Single
     }
 }
 
@@ -611,7 +625,7 @@ impl eframe::App for MangaReader {
 
         // Load file if passed as program parameter
         if let Some(p) = self.initial_path.as_ref() {
-            self.load_zip(p.clone(), ctx);
+            self.load_source(p.clone(), ctx);
             self.initial_path = None;
         }
 
@@ -619,7 +633,7 @@ impl eframe::App for MangaReader {
         if let Ok(result) = self.dialog_rx.try_recv() {
             self.is_dialog_open = false;
             if let Some(path) = result {
-                self.load_zip(path, ctx);
+                self.load_source(path, ctx);
             }
         }
 
@@ -675,21 +689,41 @@ impl eframe::App for MangaReader {
                         ui.add_space(20.0);
                         ui.label(egui::RichText::new("Image Scaling Algorithm:").color(egui::Color32::from_gray(200)).size(20.0).strong());
                         ui.separator();
+
                         let visuals = ui.visuals_mut();
                         visuals.selection.bg_fill = egui::Color32::BLACK;
                         visuals.override_text_color = Some(egui::Color32::from_gray(200));
 
-                        let mut changed = false;
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
+                        {
+                            let mut changed = false;
+                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
+                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
+                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
+                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
+                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
 
-                        if changed {
-                            self.reset_buffer();
-                            self.textures = self.load_pair(self.current_index, ctx);
-                            self.save_settings(); // Save when algorithm changes
+                            if changed {
+                                self.reset_buffer();
+                                self.textures = self.load_pair(self.current_index, ctx);
+                                self.save_settings(); // Save when algorithm changes
+                            }
+                        }
+
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Page Viewing Options:").color(egui::Color32::from_gray(200)).size(20.0).strong());
+                        ui.separator();
+
+                        {
+                            let mut changed = false;
+                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new("Single Page")).clicked();
+                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new("Double Page(Right to Left")).clicked();
+                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new("Double Page(Left to Right)")).clicked();
+
+                            if changed {
+                                self.reset_buffer();
+                                self.textures = self.load_pair(self.current_index, ctx);
+                                self.save_settings();
+                            }
                         }
 
                         ui.add_space(20.0);
@@ -733,7 +767,7 @@ impl eframe::App for MangaReader {
                                     ui.label("Toggle Fullscreen:");
                                     render_binding_button(ui, "Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
                                     ui.end_row();
-                                    ui.label("Odd/Even View Mode:");
+                                    ui.label("Odd/Even Page Start:");
                                     render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
                                     ui.end_row();
                                 });
@@ -754,11 +788,11 @@ impl eframe::App for MangaReader {
 
         // This allows opening/closing the settings
         let screen_rect = ctx.content_rect();
-        let button_height = 200.0;
+        let button_height = 160.0;
 
         // Calculate X position based on whether panel is open
         let x_pos = if self.config.show_settings {
-            screen_rect.max.x - self.config.settings_width - 25.0
+            screen_rect.max.x - self.config.settings_width - 45.0
         } else {
             screen_rect.max.x - 25.0
         };
@@ -789,14 +823,18 @@ impl eframe::App for MangaReader {
 
                 if self.zip_path.is_some() {
                     // Show single image on center if in shifted mode
-                    if self.is_shifted && self.current_index == 0 {
+                    if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
                         // --- STANDALONE COVER VIEW ---
-                        self.image_click_action(ui, rect, "cover_hit",true, 0, ctx);
+                        self.create_image_rect(ui, rect, "cover_hit", true, 0, ctx);
                     } else {
-                        let left_half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.max.y));
-                        let right_half = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.min.y), rect.max);
-                        self.image_click_action(ui, left_half, "left_hit", true, 1, ctx);
-                        self.image_click_action(ui, right_half,"right_hit", false, 0, ctx);
+                        let mut left_half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.max.y));
+                        let mut right_half = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.min.y), rect.max);
+                        if self.config.page_view_options == PageViewOptions::DoubleLR {
+                            std::mem::swap(&mut left_half, &mut right_half);
+                        }
+
+                        self.create_image_rect(ui, left_half, "left_hit", true, 1, ctx);
+                        self.create_image_rect(ui, right_half, "right_hit", false, 0, ctx);
 
                         // ONLY TRIGGER IF BACKGROUND WAS CLICKED
                         // bg_response.clicked() is true if the background was clicked.

@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
+pub enum PageViewOptions {
+    Single,     // single page
+    DoubleRL,   // double page from right to left
+    DoubleLR,   // double page from left to right
+}
+
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum ResizeMethod {
     None,       // Use original resolution
@@ -100,6 +108,7 @@ impl Default for KeyConfig {
 #[derive(Serialize, Deserialize)]
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
+    pub page_view_options: PageViewOptions,
     pub settings_width: f32,
     pub show_settings: bool,
     pub transparency_support: bool,
@@ -111,6 +120,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             resize_method: ResizeMethod::Triangle,
+            page_view_options: PageViewOptions::DoubleRL,
             settings_width: 250.0,
             show_settings: false,
             transparency_support: false,

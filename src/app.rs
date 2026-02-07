@@ -94,7 +94,7 @@ impl MangaReader {
 
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
-                        .add_filter("Manga Files", &["zip", "png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif", "pdf"])
+                        .add_filter("Manga Files", &["zip", "cbz", "png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif", "pdf"])
                         .pick_file();
 
                     let _ = sender.send(file);
@@ -108,7 +108,7 @@ impl MangaReader {
         if let Ok(entries) = fs::read_dir(current_parent) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let is_zip = path.extension().map_or(false, |ext| ext == "zip" || ext == "pdf");
+                let is_zip = path.extension().map_or(false, |ext| ext == "zip" || ext == "pdf" || ext == "cbz");
                 // Treat non-hidden directories as readable manga sources
                 let is_dir = path.is_dir() && !path.file_name().unwrap_or_default().to_string_lossy().starts_with('.');
 
@@ -321,7 +321,10 @@ impl MangaReader {
         let mut start_at_filename: Option<String> = None;
 
         // Check if it's an image file instead of a zip
-        let is_zip = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "zip");
+        let is_zip = path.extension().map_or(false, |ext| {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            ext_str == "zip" || ext_str == "cbz"
+        });
         let is_pdf = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "pdf");
 
         if path.is_file() && !is_zip && ! is_pdf {

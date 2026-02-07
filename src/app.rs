@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use eframe::egui;
 use std::fs::{self, File};
 use std::io::Read;
@@ -33,6 +34,8 @@ pub struct MangaReader {
     is_shifted: bool,
     config: AppSettings,
     binding_action: Option<String>,
+    texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    // for debug
     time_total: f32,
 }
 
@@ -71,6 +74,7 @@ impl MangaReader {
             is_shifted: false,
             config, // Store the loaded config here
             binding_action: None,
+            texture_cache: Default::default(),
             time_total: 0.0,
         }
     }
@@ -176,13 +180,18 @@ impl MangaReader {
 
             // Safety check for index bounds
             if let Some(filename) = self.image_files.get(current_target) {
+                // try to load from gpu cache first
+                if let Some(handle) = self.texture_cache.get(filename) {
+                    pair[i] = Option::from(handle.clone());
+                    continue;
+                }
                 if let Ok(mut zip_file) = archive.by_name(filename) {
                     let mut buffer = Vec::new();
                     if zip_file.read_to_end(&mut buffer).is_ok() {
                         // Decode image from memory
                         let load_start = Instant::now();
                         if let Ok(img) = image::load_from_memory(&buffer) {
-                            pair[i] = self.load_texture(img, i, ctx);
+                            pair[i] = self.load_texture(img, i, filename.clone(), ctx);
                             let temp = load_start.elapsed();
                             let elasped: f32 =  temp.as_millis() as f32;
                             self.time_total += elasped;
@@ -196,7 +205,7 @@ impl MangaReader {
         pair
     }
 
-    fn load_texture(&self, img: DynamicImage, i:usize, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    fn load_texture(&mut self, img: DynamicImage, i:usize, cache_name:String, ctx: &egui::Context) -> Option<egui::TextureHandle> {
         let resize_start = Instant::now();
         let filter = self.config.resize_method.to_filter();
         let processed_img = if let Some(filter_type) = filter {
@@ -238,11 +247,15 @@ impl MangaReader {
             println!("----------------------------------");
         }
 
-        Some(ctx.load_texture(
-            format!("img_{}", i),
+        let handle = ctx.load_texture(
+            &cache_name.clone(),
             color_img,
-            egui::TextureOptions::LINEAR // GPU still uses Linear for the final sub-pixel pass
-        ))
+            egui::TextureOptions::LINEAR // Smooth scaling
+        );
+        if self.config.enable_single_file_caching {
+            self.texture_cache.insert(cache_name.clone(), handle.clone());
+        }
+        Some(handle)
     }
 
     fn load_zip(&mut self, path: PathBuf, ctx: &egui::Context) {
@@ -253,7 +266,7 @@ impl MangaReader {
 
         if let Ok(mut archive) = zip::ZipArchive::new(file) {
             let mut images = Vec::new();
-            let exts = ["png", "jpg", "jpeg", "bmp", "webp"];
+            let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga"];
             for i in 0..archive.len() {
                 if let Ok(f) = archive.by_index(i) {
                     let name = f.name().to_lowercase();
@@ -269,6 +282,7 @@ impl MangaReader {
             } else {
                 // Reset buffer when loading another zip
                 self.reset_buffer();
+                self.texture_cache.clear();
                 self.current_index = 0;
 
                 self.scan_folder(&path);
@@ -583,7 +597,8 @@ impl eframe::App for MangaReader {
                             .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
                         ui.checkbox(&mut self.config.skip_folder, "Load Next Folder on Last File")
                             .on_hover_text("Normally the reader show error when trying to view next file on last file. Enable this will have reader trying to scan next folder.");
-
+                        ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
+                            .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
                         ui.add_space(20.0);
 
                         egui::CollapsingHeader::new(egui::RichText::new("Key Config").color(egui::Color32::from_gray(200)).size(20.0).strong())

@@ -22,5 +22,5 @@ eframe = { version = "0.33.3", features = ["serde"] }
 egui = { version = "0.33.3", features = ["serde"] }
 rfd = "0.17.2"
 zip = "7.4.0"
-image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif"] }
+image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif", "tiff", "tga"] }
 config = "0.15.19"

@@ -98,6 +98,7 @@ pub struct AppSettings {
     pub show_settings: bool,
     pub skip_folder: bool,
     pub transparency_support: bool,
+    pub enable_single_file_caching: bool,
     pub keys: KeyConfig,
 }
 
@@ -109,6 +110,7 @@ impl Default for AppSettings {
             show_settings: false,
             skip_folder: true,
             transparency_support: false,
+            enable_single_file_caching: true,
             keys: KeyConfig::default(),
         }
     }

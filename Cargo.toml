@@ -3,6 +3,9 @@ name = "LoliReader"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+debug = true
+
 [profile.maxperf]
 inherits = "release"
 opt-level = 3        # Enable maximum optimizations
@@ -20,3 +23,4 @@ egui = { version = "0.33.3", features = ["serde"] }
 rfd = "0.17.2"
 zip = "7.4.0"
 image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif"] }
+config = "0.15.19"

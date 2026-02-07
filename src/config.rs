@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SourceMode {
+    Zip,
+    Folder,
+    Pdf,
+}
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum PageViewOptions {

@@ -6,7 +6,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Instant};
 use egui::{Rect};
 use image::DynamicImage;
-use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut};
+use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
 use crate::font;
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 
@@ -33,7 +33,7 @@ pub struct MangaReader {
     binding_action: Option<String>,
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
     initial_path: Option<PathBuf>,
-    is_folder_mode: bool,
+    source_mode: SourceMode,
 }
 
 impl MangaReader {
@@ -73,7 +73,7 @@ impl MangaReader {
             config, // Store the loaded config here
             binding_action: None,
             texture_cache: Default::default(),
-            is_folder_mode: false,
+            source_mode: SourceMode::Zip,
         }
     }
 
@@ -201,7 +201,7 @@ impl MangaReader {
             None => return pair,
         };
 
-        let mut archive = if !self.is_folder_mode {
+        let mut archive = if self.source_mode == SourceMode::Zip {
             File::open(source_path).ok().and_then(|f| zip::ZipArchive::new(f).ok())
         } else {
             None
@@ -215,7 +215,7 @@ impl MangaReader {
                     continue;
                 }
 
-                let bytes = if self.is_folder_mode {
+                let bytes = if self.source_mode == SourceMode::Folder {
                     fs::read(filename).ok() // Load directly from path
                 } else if let Some(ref mut arc) = archive {
                     arc.by_name(filename).ok().and_then(|mut f| {
@@ -315,7 +315,7 @@ impl MangaReader {
                         images.push(p.to_string_lossy().to_string());
                     }
                 }
-                self.is_folder_mode = true;
+                self.source_mode = SourceMode::Folder;
             }
         } else if is_zip {
             // --- ZIP MODE ---
@@ -332,7 +332,7 @@ impl MangaReader {
                         }
                     }
                 }
-                self.is_folder_mode = false;
+                self.source_mode = SourceMode::Zip;
             }
         }
 

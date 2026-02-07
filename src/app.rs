@@ -94,7 +94,7 @@ impl MangaReader {
 
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
-                        .add_filter("Manga Files", &["zip", "cbz", "png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif", "pdf"])
+                        .add_filter("Manga Files", &["zip", "cbz", "cbr", "rar", "png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif", "pdf"])
                         .pick_file();
 
                     let _ = sender.send(file);
@@ -108,7 +108,7 @@ impl MangaReader {
         if let Ok(entries) = fs::read_dir(current_parent) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let is_zip = path.extension().map_or(false, |ext| ext == "zip" || ext == "pdf" || ext == "cbz");
+                let is_zip = path.extension().map_or(false, |ext| ext == "zip" || ext == "pdf" || ext == "cbz" || ext == "cbr" || ext == "rar");
                 // Treat non-hidden directories as readable manga sources
                 let is_dir = path.is_dir() && !path.file_name().unwrap_or_default().to_string_lossy().starts_with('.');
 
@@ -182,6 +182,10 @@ impl MangaReader {
             return;
         }
 
+        if self.zip_path.is_none() {
+            return
+        }
+
         // Preload Next (2 pages ahead)
         if self.buffer_next[0].is_none() {
             self.buffer_next = self.load_pair(idx + 2, ctx);
@@ -197,13 +201,11 @@ impl MangaReader {
 
     fn load_pair(&mut self, start_idx: usize, ctx: &egui::Context) -> [Option<egui::TextureHandle>; 2] {
         let mut pair: [Option<egui::TextureHandle>; 2] = [None, None];
-        let source_path = match &self.zip_path {
-            Some(p) => p,
-            None => return pair,
-        };
+        let source_path = self.zip_path.clone().unwrap();
 
         let mut archive = if self.source_mode == SourceMode::Zip {
-            File::open(source_path).ok().and_then(|f| zip::ZipArchive::new(f).ok())
+            let path = source_path.clone();
+            File::open(path).ok().and_then(|f| zip::ZipArchive::new(f).ok())
         } else {
             None
         };
@@ -228,6 +230,30 @@ impl MangaReader {
                         arc.by_name(filename).ok().and_then(|mut f| {
                             let mut b = Vec::new();
                             f.read_to_end(&mut b).ok().map(|_| b)
+                        })
+                    } else  if self.source_mode == SourceMode::Rar {
+                        unrar::Archive::new(&source_path).open_for_processing().ok().and_then(|rar_achive| {
+                            let mut cursor = rar_achive.read_header().ok().flatten();
+                            loop {
+                                match cursor {
+                                    Some(e) => {
+                                        // Use .entry() before reference filename
+                                        let current_name = e.entry().filename.to_str();
+
+                                        if let Some(name_str) = current_name {
+                                            if name_str == filename {
+                                                break e.read().ok().map(|(bytes, _arc)| bytes);;
+                                            } else {
+                                                cursor = e.skip().ok().and_then(|arc| arc.read_header().ok().flatten());
+                                            }
+                                        } else {
+                                            // Filename wasn't valid UTF-8, skip it
+                                            cursor = e.skip().ok().and_then(|arc| arc.read_header().ok().flatten());
+                                        }
+                                    }
+                                    None => break None,
+                                }
+                            }
                         })
                     } else {
                         None
@@ -320,63 +346,80 @@ impl MangaReader {
         let mut target_path = path.clone();
         let mut start_at_filename: Option<String> = None;
 
-        // Check if it's an image file instead of a zip
-        let is_zip = path.extension().map_or(false, |ext| {
-            let ext_str = ext.to_string_lossy().to_lowercase();
-            ext_str == "zip" || ext_str == "cbz"
-        });
-        let is_pdf = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "pdf");
-
-        if path.is_file() && !is_zip && ! is_pdf {
-            // Pivot: Use the folder containing this image as the source
-            if let Some(parent) = path.parent() {
-                start_at_filename = Some(path.to_string_lossy().to_string());
-                target_path = parent.to_path_buf();
-            }
-        }
-
         let mut images = Vec::new();
         let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif"];
-
-        if is_pdf {
-            // --- PDF MODE ---
-            // Initialize Pdfium (you may need to bundle the dll/so/dylib)
-            let pdfium = pdfium_render::prelude::Pdfium::default();
-            if let Ok(doc) = pdfium.load_pdf_from_file(&path, None) {
-                let page_count = doc.pages().len();
-                for i in 0..page_count {
-                    // We use a virtual naming scheme for PDF pages in our image_files list
-                    images.push(format!("pdf_page_{}", i));
-                }
-                self.source_mode = SourceMode::Pdf;
-            }
-        } else if target_path.is_dir() {
-            // --- FOLDER MODE ---
-            if let Ok(entries) = fs::read_dir(&target_path) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_file() && exts.iter().any(|&e| p.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == e)) {
-                        images.push(p.to_string_lossy().to_string());
+        let extension = path.extension().map_or("".to_string(), |ext| ext.to_string_lossy().to_lowercase());
+        match extension.as_str() {
+            "zip" | "cbz" => {
+                let file = match File::open(&target_path) {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+                if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                    for i in 0..archive.len() {
+                        if let Ok(f) = archive.by_index(i) {
+                            let name = f.name().to_lowercase();
+                            if exts.iter().any(|&e| name.ends_with(&format!(".{}", e))) {
+                                images.push(f.name().to_string());
+                            }
+                        }
                     }
+                    self.source_mode = SourceMode::Zip;
                 }
-                self.source_mode = SourceMode::Folder;
+                self.source_mode = SourceMode::Zip;
+                // ... existing zip logic
             }
-        } else if is_zip {
-            // --- ZIP MODE ---
-            let file = match File::open(&target_path) {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            if let Ok(mut archive) = zip::ZipArchive::new(file) {
-                for i in 0..archive.len() {
-                    if let Ok(f) = archive.by_index(i) {
-                        let name = f.name().to_lowercase();
-                        if exts.iter().any(|&e| name.ends_with(&format!(".{}", e))) {
-                            images.push(f.name().to_string());
+            "cbr" | "rar" => {
+                self.source_mode = SourceMode::Rar;
+                if let Ok(mut archive) = unrar::Archive::new(&path).open_for_listing() {
+                    for entry in archive {
+                        if let Ok(e) = entry {
+                            // Convert Option<&str> to String safely
+                            if let Some(name_str) = e.filename.to_str() {
+                                let name = name_str.to_string();
+                                // Check if it's an image extension
+                                if exts.iter().any(|&e_ext| name.to_lowercase().ends_with(e_ext)) {
+                                    images.push(name);
+                                }
+                            }
                         }
                     }
                 }
-                self.source_mode = SourceMode::Zip;
+            }
+            "pdf" => {
+                // --- PDF MODE ---
+                // Initialize Pdfium (you may need to bundle the dll/so/dylib)
+                let pdfium = pdfium_render::prelude::Pdfium::default();
+                if let Ok(doc) = pdfium.load_pdf_from_file(&path, None) {
+                    let page_count = doc.pages().len();
+                    for i in 0..page_count {
+                        // We use a virtual naming scheme for PDF pages in our image_files list
+                        images.push(format!("pdf_page_{}", i));
+                    }
+                }
+                self.source_mode = SourceMode::Pdf;
+            }
+            _ => {
+                if path.is_file() {
+                    // Pivot: Use the folder containing this image as the source
+                    if let Some(parent) = path.parent() {
+                        start_at_filename = Some(path.to_string_lossy().to_string());
+                        target_path = parent.to_path_buf();
+                    }
+                }
+
+                if target_path.is_dir() {
+                    // --- FOLDER MODE ---
+                    if let Ok(entries) = fs::read_dir(&target_path) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.is_file() && exts.iter().any(|&e| p.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == e)) {
+                                images.push(p.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+                self.source_mode = SourceMode::Folder;
             }
         }
 
@@ -924,11 +967,11 @@ impl eframe::App for MangaReader {
                 // Error Overlay Logic (Fading)
                 if let Some((msg, start_time)) = &self.error_msg {
                     let elapsed = start_time.elapsed().as_secs_f32();
-                    if elapsed < 3.0 {
-                        let opacity = (1.0 - (elapsed / 3.0)).clamp(0.0, 1.0);
+                    if elapsed < 2.0 {
+                        let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
                         let padding = if self.config.show_settings { -(self.config.settings_width/2.0)  } else { 0.0 };
                         egui::Window::new("")
-                            .anchor(egui::Align2::CENTER_TOP, [padding, 120.0]) // Positioned at top center
+                            .anchor(egui::Align2::CENTER_TOP, [padding, 20.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())
                                 .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha((50.0 * opacity) as u8))))
@@ -948,13 +991,12 @@ impl eframe::App for MangaReader {
                 // --- ZIP FILENAME OVERLAY (Center-Top) ---
                 if let Some((name, start_time)) = &self.zip_name_display {
                     let elapsed = start_time.elapsed().as_secs_f32();
-                    let duration = 3.0; // Show for 3 seconds total
 
-                    if elapsed < duration {
-                        let opacity = (1.0 - (elapsed / duration)).clamp(0.0, 1.0);
+                    if elapsed < 2.0 {
+                        let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
                         let padding = if self.config.show_settings { -(self.config.settings_width/2.0) } else { 0.0 };
                         egui::Window::new("zip_name_overlay")
-                            .anchor(egui::Align2::CENTER_TOP, [padding, 60.0]) // Positioned at top center
+                            .anchor(egui::Align2::CENTER_TOP, [padding, 80.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())
                                 .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha((50.0 * opacity) as u8))))

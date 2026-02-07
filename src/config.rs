@@ -5,6 +5,7 @@ pub enum SourceMode {
     Zip,
     Folder,
     Pdf,
+    Rar
 }
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]

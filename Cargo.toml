@@ -15,6 +15,7 @@ panic = "abort"      # Reduce binary size and improve performance by killing on 
 strip = "symbols"    # Strip symbols to make the binary smaller (optional)
 
 [dependencies]
+pdfium-render = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 windows = { version = "0.62.2", features = ["Win32_UI_Shell"] }
@@ -22,5 +23,4 @@ eframe = { version = "0.33.3", features = ["serde"] }
 egui = { version = "0.33.3", features = ["serde"] }
 rfd = "0.17.2"
 zip = "7.4.0"
-image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif", "tiff", "tga"] }
-config = "0.15.19"
+image = { version = "0.25.9", features = ["default", "webp", "jpeg", "png", "bmp", "gif", "tiff", "tga", "avif"] }

@@ -6,6 +6,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Instant};
 use egui::{Rect};
 use image::DynamicImage;
+use pdfium_render::prelude::Pixels;
 use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
 use crate::font;
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
@@ -93,7 +94,7 @@ impl MangaReader {
 
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
-                        .add_filter("Manga Files", &["zip", "jpg", "jpeg", "png", "webp", "bmp"])
+                        .add_filter("Manga Files", &["zip", "png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif", "pdf"])
                         .pick_file();
 
                     let _ = sender.send(file);
@@ -107,7 +108,7 @@ impl MangaReader {
         if let Ok(entries) = fs::read_dir(current_parent) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let is_zip = path.extension().map_or(false, |ext| ext == "zip");
+                let is_zip = path.extension().map_or(false, |ext| ext == "zip" || ext == "pdf");
                 // Treat non-hidden directories as readable manga sources
                 let is_dir = path.is_dir() && !path.file_name().unwrap_or_default().to_string_lossy().starts_with('.');
 
@@ -215,25 +216,52 @@ impl MangaReader {
                     continue;
                 }
 
-                let bytes = if self.source_mode == SourceMode::Folder {
-                    fs::read(filename).ok() // Load directly from path
-                } else if let Some(ref mut arc) = archive {
-                    arc.by_name(filename).ok().and_then(|mut f| {
-                        let mut b = Vec::new();
-                        f.read_to_end(&mut b).ok().map(|_| b)
-                    })
-                } else {
-                    None
-                };
-
-                if let Some(buffer) = bytes {
-                    if let Ok(img) = image::load_from_memory(&buffer) {
+                if self.source_mode == SourceMode::Pdf {
+                    let dynamic_image = self.render_pdf_page(current_target, ctx);
+                    if let Some(img) = dynamic_image {
                         pair[i] = self.load_texture(img, filename.clone(), ctx);
+                    }
+                } else {
+                    let bytes = if self.source_mode == SourceMode::Folder {
+                        fs::read(filename).ok() // Load directly from path
+                    } else if let Some(ref mut arc) = archive {
+                        arc.by_name(filename).ok().and_then(|mut f| {
+                            let mut b = Vec::new();
+                            f.read_to_end(&mut b).ok().map(|_| b)
+                        })
+                    } else {
+                        None
+                    };
+
+                    if let Some(buffer) = bytes {
+                        if let Ok(img) = image::load_from_memory(&buffer) {
+                            pair[i] = self.load_texture(img, filename.clone(), ctx);
+                        }
                     }
                 }
             }
         }
         pair
+    }
+
+    /// Helper to render a specific page
+    fn render_pdf_page(&self, index: usize, ctx: &egui::Context) -> Option<DynamicImage> {
+        // You would typically store a reference to the loaded document
+        // and render the page here.
+        let pdfium = pdfium_render::prelude::Pdfium::default();
+        let doc = pdfium.load_pdf_from_file(self.zip_path.as_ref()?, None).ok()?;
+        let page = doc.pages().get(index as u16).ok()?;
+        let width_inch = page.width().value ;
+        let height_inch = page.height().value;
+
+        let screen_size = ctx.content_rect();
+        let target_h = screen_size.height();
+        let h_ratio = target_h / height_inch;
+        let target_w = width_inch * h_ratio;
+
+        // Render at 300 DPI or based on screen height for clarity
+        let bitmap = page.render(target_w as Pixels, target_h as Pixels, None).ok()?;
+        Some(bitmap.as_image()) // pdfium-render integrates with the 'image' crate
     }
 
     fn load_texture(&mut self, img: DynamicImage, cache_name:String, ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -294,8 +322,9 @@ impl MangaReader {
 
         // Check if it's an image file instead of a zip
         let is_zip = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "zip");
+        let is_pdf = path.extension().map_or(false, |ext| ext.to_string_lossy().to_lowercase() == "pdf");
 
-        if path.is_file() && !is_zip {
+        if path.is_file() && !is_zip && ! is_pdf {
             // Pivot: Use the folder containing this image as the source
             if let Some(parent) = path.parent() {
                 start_at_filename = Some(path.to_string_lossy().to_string());
@@ -304,9 +333,21 @@ impl MangaReader {
         }
 
         let mut images = Vec::new();
-        let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga"];
+        let exts = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tiff", "tga", "avif"];
 
-        if target_path.is_dir() {
+        if is_pdf {
+            // --- PDF MODE ---
+            // Initialize Pdfium (you may need to bundle the dll/so/dylib)
+            let pdfium = pdfium_render::prelude::Pdfium::default();
+            if let Ok(doc) = pdfium.load_pdf_from_file(&path, None) {
+                let page_count = doc.pages().len();
+                for i in 0..page_count {
+                    // We use a virtual naming scheme for PDF pages in our image_files list
+                    images.push(format!("pdf_page_{}", i));
+                }
+                self.source_mode = SourceMode::Pdf;
+            }
+        } else if target_path.is_dir() {
             // --- FOLDER MODE ---
             if let Ok(entries) = fs::read_dir(&target_path) {
                 for entry in entries.flatten() {

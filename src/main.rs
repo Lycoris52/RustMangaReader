@@ -16,7 +16,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Rust Manga Reader - Productivity",
+        "Rust Manga Reader for Windows - Productivity",
         options,
         Box::new(|cc| Ok(Box::new(MangaReader::new(cc)))),
     )

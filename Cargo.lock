@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "LoliReader"
+name = "RustMangaReader"
 version = "0.1.0"
 dependencies = [
  "config",

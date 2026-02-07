@@ -16,7 +16,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Loli Manga Reader - Productivity",
+        "Rust Manga Reader - Productivity",
         options,
         Box::new(|cc| Ok(Box::new(MangaReader::new(cc)))),
     )

@@ -564,11 +564,11 @@ impl eframe::App for MangaReader {
                         visuals.override_text_color = Some(egui::Color32::from_gray(200));
 
                         let mut changed = false;
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Balance)")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
                         changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
                         changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
-                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality)")).clicked();
+                        changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
 
                         if changed {
                             self.reset_buffer();
@@ -723,8 +723,9 @@ impl eframe::App for MangaReader {
                     let elapsed = start_time.elapsed().as_secs_f32();
                     if elapsed < 3.0 {
                         let opacity = (1.0 - (elapsed / 3.0)).clamp(0.0, 1.0);
+                        let padding = if self.config.show_settings { -self.config.settings_width } else { 0.0 };
                         egui::Window::new("")
-                            .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]) // Positioned at top center
+                            .anchor(egui::Align2::CENTER_TOP, [padding, 120.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())
                                 .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha((50.0 * opacity) as u8))))
@@ -748,9 +749,9 @@ impl eframe::App for MangaReader {
 
                     if elapsed < duration {
                         let opacity = (1.0 - (elapsed / duration)).clamp(0.0, 1.0);
-
+                        let padding = if self.config.show_settings { -self.config.settings_width } else { 0.0 };
                         egui::Window::new("zip_name_overlay")
-                            .anchor(egui::Align2::CENTER_TOP, [0.0, 60.0]) // Positioned at top center
+                            .anchor(egui::Align2::CENTER_TOP, [padding, 60.0]) // Positioned at top center
                             .frame(egui::Frame::window(&ui.style())
                                 .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha((50.0 * opacity) as u8))))

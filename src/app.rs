@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use egui::{Rect};
-use image::DynamicImage;
+use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
 use crate::font;
@@ -267,8 +267,19 @@ impl MangaReader {
                     };
 
                     if let Some(buffer) = bytes {
-                        if let Ok(img) = image::load_from_memory(&buffer) {
-                            pair[i] = self.load_texture(img, filename.clone(), ctx);
+                        match image::guess_format(&buffer) {
+                            Ok(format) => {
+                                if let Ok(img) = image::load_from_memory_with_format(&buffer, format) {
+                                    pair[i] = self.load_texture(img, filename.clone(), ctx);
+                                }
+                            }
+                            Err(_) => {
+                                // Fallback: If guessing fails, try loading as TGA
+                                // since TGA is often the one that fails detection.
+                                if let Ok(img) = image::load_from_memory_with_format(&buffer, ImageFormat::Tga) {
+                                    pair[i] = self.load_texture(img, filename.clone(), ctx);
+                                }
+                            }
                         }
                     }
                 }

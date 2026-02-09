@@ -1,0 +1,77 @@
+{
+  "resize_method": "Triangle",
+  "page_view_options": "DoubleRL",
+  "settings_width": 279.09375,
+  "show_settings": true,
+  "transparency_support": false,
+  "enable_single_file_caching": true,
+  "image_delay": 100,
+  "keys": {
+    "next_page": {
+      "key": "ArrowLeft",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "prev_page": {
+      "key": "ArrowRight",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "first_page": {
+      "key": "Home",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "last_page": {
+      "key": "End",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "next_file": {
+      "key": "ArrowDown",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "prev_file": {
+      "key": "ArrowUp",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "next_folder": {
+      "key": "ArrowLeft",
+      "ctrl": true,
+      "alt": false,
+      "shift": false
+    },
+    "prev_folder": {
+      "key": "ArrowRight",
+      "ctrl": true,
+      "alt": false,
+      "shift": false
+    },
+    "fullscreen": {
+      "key": "Enter",
+      "ctrl": true,
+      "alt": false,
+      "shift": false
+    },
+    "view_mode": {
+      "key": "Enter",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    },
+    "open_file": {
+      "key": "O",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
+    }
+  }
+}

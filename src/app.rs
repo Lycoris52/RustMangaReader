@@ -1,3 +1,4 @@
+use std::env;
 use eframe::egui;
 use std::fs::{self, File};
 use std::io::Read;
@@ -82,7 +83,11 @@ impl MangaReader {
 
     fn save_settings(&self) {
         if let Ok(json) = serde_json::to_string_pretty(&self.config) {
-            let _ = std::fs::write("settings.json", json);
+            // write the config file in executable directory
+            let mut exe_path = env::current_exe().expect("Failed to get current exe path");
+            exe_path.pop();
+            exe_path.push("settings.json");
+            let _ = std::fs::write(exe_path, json);
         }
     }
 

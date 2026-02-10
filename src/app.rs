@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
-use egui::{Rect};
+use egui::{Align, Rect};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
@@ -184,18 +184,22 @@ impl MangaReader {
     fn update_buffers(&mut self, ctx: &egui::Context) {
         let idx = self.current_index;
 
+        if self.zip_path.is_none() {
+            return
+        }
+
         // Only update if we moved OR if the buffers were recently consumed
         if self.last_buffered_index == Some(idx) {
             return;
         }
 
-        if self.zip_path.is_none() {
-            return
-        }
-
         // Preload Next (2 pages ahead)
         if self.buffer_next[0].is_none() {
-            self.buffer_next = self.load_pair(idx + 2, ctx);
+            let mut next_index_to_load = idx + 2;
+            if idx == 0 && self.is_shifted {
+                next_index_to_load = 1;
+            }
+            self.buffer_next = self.load_pair(next_index_to_load, ctx);
         }
 
         // Preload Prev (2 pages behind)
@@ -612,7 +616,7 @@ impl MangaReader {
         self.buffer_next = [None, None];
     }
 
-    fn create_image_rect(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context) {
+    fn create_image_rect(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context, align: egui::Align) {
         ui.allocate_ui_at_rect(rect, |ui| {
             // 1. Create an invisible interaction area for the whole half
             let resp = ui.interact(rect, ui.id().with(hit_id), egui::Sense::click());
@@ -625,13 +629,14 @@ impl MangaReader {
             }
 
             // 2. Render the image on top
-            ui.centered_and_justified(|ui| {
-                if let Some(tex) = &self.textures[tex_index] {
+            if let Some(tex) = &self.textures[tex_index] {
+                let layout = egui::Layout::top_down(align);
+                ui.with_layout(layout, |ui| {
                     ui.add(egui::Image::new(tex)
                         .fit_to_exact_size(rect.size())
                         .maintain_aspect_ratio(true));
-                }
-            });
+                });
+            }
         });
     }
 
@@ -721,7 +726,6 @@ impl eframe::App for MangaReader {
 
                 // Adjust current_index to keep the view consistent
                 if self.is_shifted {
-                    // If we were at 0, move to 1. Otherwise, ensure we land on an odd index.
                     if self.current_index == 0 { self.current_index = 0; }
                     else if self.current_index % 2 == 0 { self.current_index += 1; }
                 } else {
@@ -730,6 +734,8 @@ impl eframe::App for MangaReader {
                     if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
                 }
 
+                self.reset_buffer();
+                self.texture_cache.clear();
                 self.textures = self.load_pair(self.current_index, ctx);
                 let msg = if self.is_shifted { "Mode: Cover + Spreads" } else { "Mode: Standard Pairs" };
                 self.show_fading_error(msg); // Reusing your error logic to show the mode change
@@ -942,16 +948,21 @@ impl eframe::App for MangaReader {
                     // Show single image on center if in shifted mode
                     if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
                         // --- STANDALONE COVER VIEW ---
-                        self.create_image_rect(ui, rect, "cover_hit", true, 0, ctx);
+                        self.create_image_rect(ui, rect, "cover_hit", true, 0, ctx, egui::Align::Center);
                     } else {
-                        let mut left_half = egui::Rect::from_min_max(rect.min, egui::pos2(rect.center().x, rect.max.y));
-                        let mut right_half = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.min.y), rect.max);
+                        let center = rect.center().x;
+                        let mut left_half = egui::Rect::from_min_max(rect.min, egui::pos2(center, rect.max.y));
+                        let mut right_half = egui::Rect::from_min_max(egui::pos2(center, rect.min.y), rect.max);
+                        let mut align_for_left_side: Align = egui::Align::RIGHT;
+                        let mut align_for_right_side: Align = egui::Align::LEFT;
                         if self.config.page_view_options == PageViewOptions::DoubleLR {
                             std::mem::swap(&mut left_half, &mut right_half);
+                            align_for_left_side = egui::Align::LEFT;
+                            align_for_right_side = egui::Align::RIGHT;
                         }
 
-                        self.create_image_rect(ui, left_half, "left_hit", true, 1, ctx);
-                        self.create_image_rect(ui, right_half, "right_hit", false, 0, ctx);
+                        self.create_image_rect(ui, left_half, "left_hit", true, 1, ctx, align_for_left_side);
+                        self.create_image_rect(ui, right_half, "right_hit", false, 0, ctx, align_for_right_side);
 
                         // ONLY TRIGGER IF BACKGROUND WAS CLICKED
                         // bg_response.clicked() is true if the background was clicked.

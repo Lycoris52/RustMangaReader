@@ -14,6 +14,14 @@ Designed specifically for the Windows, it focuses on providing a fluid, lag-free
 * **Smart Scaling**: Includes multiple resampling algorithms from Nearest Neighbor to Lanczos3 to make every scan look its best on your monitor.
 * **Tailored Reading**: Supports Single Page, Double Page (Left-to-Right), and Double Page (Right-to-Left) modes, including a "Cover + Spreads" shift toggle (Odd/Even page).
 
+### 🎁 Free & Open Feedback
+
+MangaReader is a completely free application! \
+I want to make it the best it can be for the community. If you encounter any bugs, have performance issues, or want to request a new feature, please feel free to contact me! You can reach out by:
+
+* Opening an Issue here on GitHub.
+* Contact me via [Huggingface](https://huggingface.co/Lycoris53) msg
+
 ### 📂 Supported Formats
 
 RustMangaReader handles both compressed archives and raw file structures seamlessly.

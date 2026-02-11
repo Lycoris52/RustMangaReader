@@ -133,7 +133,7 @@ impl Default for AppSettings {
             show_settings: false,
             transparency_support: false,
             enable_single_file_caching: true,
-            image_delay: 100,
+            image_delay: 0,
             keys: KeyConfig::default(),
         }
     }

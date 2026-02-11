@@ -193,9 +193,11 @@ impl MangaReader {
             return;
         }
 
+        let step  = if self.is_single_page() { 1 } else { 2 };
+
         // Preload Next (2 pages ahead)
         if self.buffer_next[0].is_none() {
-            let mut next_index_to_load = idx + 2;
+            let mut next_index_to_load = idx + step;
             if idx == 0 && self.is_shifted {
                 next_index_to_load = 1;
             }
@@ -203,14 +205,24 @@ impl MangaReader {
         }
 
         // Preload Prev (2 pages behind)
-        if idx >= 2 && self.buffer_prev[0].is_none() {
-            self.buffer_prev = self.load_pair(idx - 2, ctx);
+        if idx >= step && self.buffer_prev[0].is_none() {
+            self.buffer_prev = self.load_pair(idx - step, ctx);
+        }
+
+        // Preload prev buffer case for when using cover mode
+        if self.is_shifted && idx >= 1 && self.buffer_prev[0].is_none() {
+            self.buffer_prev = self.load_pair(0, ctx);
         }
 
         self.last_buffered_index = Some(idx);
     }
 
     fn load_pair(&mut self, start_idx: usize, ctx: &egui::Context) -> [Option<egui::TextureHandle>; 2] {
+        // no source path set yet
+        if self.zip_path == None {{
+            return [None, None];
+        }}
+
         let mut pair: [Option<egui::TextureHandle>; 2] = [None, None];
         let source_path = self.zip_path.clone().unwrap();
 
@@ -472,6 +484,8 @@ impl MangaReader {
 
             self.textures = self.load_pair(self.current_index, ctx);
         }
+
+        self.page_indicator_time = Some(Instant::now());
     }
 
     fn show_fading_error(&mut self, msg: &str) {
@@ -494,11 +508,11 @@ impl MangaReader {
                 // also slide the current texture to prev buffer
                 self.buffer_prev = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_next);
-                self.buffer_next = [None, None];
             } else {
                 // Fallback if buffer wasn't ready (e.g., very fast clicking)
                 self.textures = self.load_pair(self.current_index, ctx);
             }
+            self.buffer_next = [None, None];
         } else {
             // End of Zip list reached, try to find next zip ---
             self.next_zip(ctx);
@@ -520,10 +534,10 @@ impl MangaReader {
             if self.buffer_prev[0].is_some() {
                 self.buffer_next = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_prev);
-                self.buffer_prev = [None, None];
             } else {
                 self.textures = self.load_pair(self.current_index, ctx);
             }
+            self.buffer_prev = [None, None];
         } else {
             //e are at the start of the Zip, move to PREVIOUS ZIP ---
             self.prev_zip(ctx);

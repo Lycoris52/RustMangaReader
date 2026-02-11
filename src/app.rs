@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
-use egui::{Align, Rect};
+use egui::{Align, Direction, PointerButton, Rect};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
@@ -37,6 +37,7 @@ pub struct MangaReader {
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
+    zoom_factor: f32,
 }
 
 impl MangaReader {
@@ -78,6 +79,7 @@ impl MangaReader {
             texture_cache: Default::default(),
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
+            zoom_factor: 1.0,
         }
     }
 
@@ -185,6 +187,10 @@ impl MangaReader {
         let idx = self.current_index;
 
         if self.zip_path.is_none() {
+            return
+        }
+
+        if self.zoom_factor != 1.0 {
             return
         }
 
@@ -332,7 +338,8 @@ impl MangaReader {
             let target_h = screen_size.height() as u32;
             let aspect_ratio = img.width() as f32 / img.height() as f32;
             let target_w = (target_h as f32 * aspect_ratio) as u32;
-            img.resize(target_w, target_h, filter_type)
+            let factor = if self.zoom_factor != 1.0 {3} else {1};
+            img.resize(target_w * factor, target_h * factor, filter_type)
         } else {
             img // No resizing needed, return original
         };
@@ -632,7 +639,7 @@ impl MangaReader {
 
     fn create_image_rect(&mut self, ui: &mut egui::Ui, rect: Rect, hit_id: &str, is_next: bool, tex_index: usize, ctx: &egui::Context, align: egui::Align) {
         ui.allocate_ui_at_rect(rect, |ui| {
-            // 1. Create an invisible interaction area for the whole half
+            // Create an invisible interaction area for the whole half
             let resp = ui.interact(rect, ui.id().with(hit_id), egui::Sense::click());
             if resp.clicked() {
                 if is_next {
@@ -642,7 +649,7 @@ impl MangaReader {
                 }
             }
 
-            // 2. Render the image on top
+            // Render the image on top
             if let Some(tex) = &self.textures[tex_index] {
                 let layout = egui::Layout::top_down(align);
                 ui.with_layout(layout, |ui| {
@@ -862,6 +869,25 @@ impl eframe::App for MangaReader {
                         }
 
                         ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Zoom:").color(egui::Color32::from_gray(200)).size(20.0).strong());
+                        ui.separator();
+
+                        let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text("Zoom x"));
+                        if zoom_slider.changed() {
+                            // If we zoom, and we aren't in single page mode, force it (as per your requirement)
+                            if self.zoom_factor != 1.0 {
+                                self.reset_buffer();
+                                self.textures = self.load_pair(self.current_index, ctx);
+                                self.config.page_view_options = PageViewOptions::Single;
+                            }
+                        }
+
+                        if ui.button(egui::RichText::new("Reset Zoom").color(egui::Color32::from_gray(60))).clicked() {
+                            self.zoom_factor = 1.0;
+                        }
+                        ui.separator();
+
+                        ui.add_space(20.0);
                         ui.label(egui::RichText::new("Others:").color(egui::Color32::from_gray(200)).size(20.0).strong());
                         ui.separator();
                         ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
@@ -959,10 +985,41 @@ impl eframe::App for MangaReader {
                 let bg_response = ui.interact(rect, ui.id().with("bg"), egui::Sense::click());
 
                 if self.zip_path.is_some() {
-                    // Show single image on center if in shifted mode
-                    if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
-                        // --- STANDALONE COVER VIEW ---
-                        self.create_image_rect(ui, rect, "cover_hit", true, 0, ctx, egui::Align::Center);
+                    // Show single image on center or if in shifted mode or is zoomed
+                    let is_zoomed = (self.zoom_factor - 1.0).abs() > 0.01;
+                    let viewing_single = self.is_single_page() || (self.is_shifted && self.current_index == 0) || is_zoomed;
+
+                    if viewing_single {
+                        // Wrap in ScrollArea for panning/dragging
+                        egui::ScrollArea::both()
+                            .auto_shrink([false; 2])
+                            .drag_to_scroll(true) // This enables the "drag the image" feature
+                            .show(ui, |ui| {
+                                if let Some(tex) = &self.textures[0] {
+                                    let tex_size = tex.size_vec2();
+                                    let aspect_ratio = tex_size.x / tex_size.y;
+
+                                    // Calculate size based on zoom
+                                    // 1.0 zoom = screen height. 2.0 zoom = double screen height.
+                                    let zoom_height = rect.height() * self.zoom_factor;
+                                    let zoom_width = zoom_height * aspect_ratio;
+                                    let zoom_size = egui::vec2(zoom_width, zoom_height);
+
+                                    let layout = egui::Layout::centered_and_justified(Direction::TopDown);
+                                    ui.with_layout(layout, |ui| {
+                                        ui.add(egui::Image::new(tex)
+                                            .fit_to_exact_size(zoom_size)
+                                            .maintain_aspect_ratio(true));
+                                    });
+                                }
+                            });
+                        let resp = ui.interact(rect, ui.id().with("cover_hit"), egui::Sense::click());
+                        if resp.clicked() {
+                            self.next_page(ctx);
+                        }
+                        if resp.clicked_by(PointerButton::Secondary) {
+                            self.prev_page(ctx);
+                        }
                     } else {
                         let center = rect.center().x;
                         let mut left_half = egui::Rect::from_min_max(rect.min, egui::pos2(center, rect.max.y));

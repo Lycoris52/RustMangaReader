@@ -8,8 +8,9 @@ Designed specifically for the Windows, it focuses on providing a fluid, lag-free
 
 * **Built for Speed**: Uses a dual-buffer system to preload upcoming and previous pages in the background, ensuring near-instant page turns.
 * **Optimized for Windows**: 
-    * Leverages Windows-native sorting (so "Page2" comes before "Page10")
-    * High-performance GPU rendering.
+    * Leverages **Windows-native sorting** (so "Page2" comes before "Page10")
+    * **High-performance** GPU rendering.
+    * **No Zip extraction required** RustMangaReader reads directly from compressed files saving disk space without sacrificing speed.
 * **Smart Scaling**: Includes multiple resampling algorithms from Nearest Neighbor to Lanczos3 to make every scan look its best on your monitor.
 * **Tailored Reading**: Supports Single Page, Double Page (Left-to-Right), and Double Page (Right-to-Left) modes, including a "Cover + Spreads" shift toggle (Odd/Even page).
 
@@ -57,7 +58,7 @@ Feel free to contact me if you have any requests or found any bugs.
 <a name="japanese-explanation"></a>
 # <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">  RustMangaReader <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">
 
-RustMangaReaderは、Rustで構築された高性能かつ軽量なオフラインマンガ・コミックビューアです。 \ 
+RustMangaReaderは、Rustで構築された高性能かつ軽量なオフラインマンガ・コミックビューアです。   
 Windows専用に設計されており、ダブルバファーとネイティブレンダリングによって、遅延のない滑らかな読書体験を提供することに特化しています。
 ### ⚡ 主な機能
 

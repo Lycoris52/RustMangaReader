@@ -5,7 +5,7 @@
   "show_settings": true,
   "transparency_support": false,
   "enable_single_file_caching": true,
-  "image_delay": 100,
+  "image_delay": 0,
   "keys": {
     "next_page": {
       "key": "ArrowLeft",

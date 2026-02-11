@@ -846,6 +846,7 @@ impl eframe::App for MangaReader {
 
                             if changed {
                                 self.reset_buffer();
+                                self.texture_cache.clear();
                                 self.textures = self.load_pair(self.current_index, ctx);
                                 self.save_settings(); // Save when algorithm changes
                             }
@@ -877,6 +878,7 @@ impl eframe::App for MangaReader {
                             // If we zoom, and we aren't in single page mode, force it (as per your requirement)
                             if self.zoom_factor != 1.0 {
                                 self.reset_buffer();
+                                self.texture_cache.clear();
                                 self.textures = self.load_pair(self.current_index, ctx);
                                 self.config.page_view_options = PageViewOptions::Single;
                             }

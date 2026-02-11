@@ -33,7 +33,7 @@ RustMangaReader supports almost every modern image format, including high-effici
 
 The app features a fully customizable keybinding system. By default, you can navigate using:
 
-    Next/Prev Page: Arrow keys or Mouse Wheel (with smart-scroll locking).
+    Full Keyboard controls: All key controls such as next/prev page, next zip file, next folder is bindable.
     Fullscreen: Toggle for an immersive experience.
     Quick Settings: An integrated side panel to swap scaling methods, view modes, or rebind keys on the fly.
 
@@ -66,6 +66,7 @@ Windows専用に設計されており、ダブルバファーとネイティブ�
 * **Windowsに最適化**: Windowsネイティブのソート順（「Page2」が「Page10」の前に正しく並ぶ）と、高性能なGPUレンダリングを活用しています。
 * **スマートスケーリング**: Nearest Neighbor（最速）からLanczos3（高品質）まで、複数のリサンプリングアルゴリズムを搭載。どんなスキャン画像もモニターに合わせて美しく表示します。
 * **読書スタイルに合わせた閲覧**: 単一ページ、見開き（左開き/右開き）モードをサポート。「表紙＋見開き」の切り替え（奇数/偶数ページ開始）も可能です。
+* **アーカイブの展開不要**: 圧縮ファイルから直接読み込み（オンザフライ読み込み）を行うため、ストレージを消費せず、かつ高速な動作を実現しています。
 
 ### 📂 対応フォーマット
 
@@ -87,7 +88,7 @@ MangaReaderは、圧縮アーカイブと生のファイル構造の両方をシ
 
 アプリには完全にカスタマイズ可能なキーバインドシステムが搭載されています。 デフォルトの操作は以下の通りです：
 
-    次/前のページ: 矢印キーまたはマウスホイール（スマートスクロールロック機能付き）。
+    フルキーボード操作: ページ送り、次のZIPファイル、次のフォルダ移動など、すべての操作を自由にキー割り当て（バインド）可能です。
     全画面表示: 没入感のある読書体験を切り替えます。
     クイック設定: 統合されたサイドパネルから、スケーリング方法や閲覧モードの変更、キーのリバインドが即座に行えます。
 

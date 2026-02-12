@@ -1002,7 +1002,7 @@ impl eframe::App for MangaReader {
 
         if self.config.show_top_bar && !self.is_fullscreen {
             egui::TopBottomPanel::top("top_toolbar")
-                .frame(egui::Frame::none().fill(egui::Color32::from_gray(30)).inner_margin(4.0))
+                .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(30)).inner_margin(4.0))
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         // --- Folder Navigation ---

@@ -889,7 +889,8 @@ impl eframe::App for MangaReader {
                         ui.separator();
 
                         let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text("Zoom x"));
-                        if zoom_slider.changed() {
+                        let is_scrubbing_zoom = zoom_slider.dragged();
+                        if zoom_slider.changed() && !is_scrubbing_zoom {
                             // If we zoom, and we aren't in single page mode, force it (as per your requirement)
                             if self.zoom_factor != 1.0 {
                                 self.reset_buffer();

@@ -2,7 +2,7 @@
 
 # <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">  RustMangaReader <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">
 
-RustMangaReader is a high-performance, lightweight offline manga and comic viewer built in Rust. \
+RustMangaReader is a high-performance, lightweight **offline** manga and comic viewer built in Rust. \
 Designed specifically for the Windows, it focuses on providing a fluid, lag-free reading experience through preloading and native rendering.
 ### ⚡ Key Features
 
@@ -60,6 +60,13 @@ The app features a fully customizable keybinding system. By default, you can nav
 
     The binary and your settings.json will be located in target/release/.
 
+### ⚠️ Disclaimer & Responsibility
+
+RustMangaReader is strictly a viewing utility. 
+> * **No Content Provided**: This software does not provide, host, or link to any manga, comics, or archive download sources.
+> * **User Responsibility**: Users are solely responsible for the content they open within the application.
+> * **No Liability**: The developer takes no responsibility for any copyright infringements or legal issues arising from the user's choice of reading material or download sources.
+
 Feel free to contact me if you have any requests or found any bugs.
 
 ---
@@ -114,3 +121,11 @@ MangaReaderは、圧縮アーカイブと生のファイル構造の両方をシ
     cargo build --release
 
     バイナリ（.exe）と settings.json は target/release/ フォルダ内に生成されます。
+
+### ⚠️ 注意事項
+
+MangaReaderは、あくまで閲覧専用のユーティリティソフトです。
+
+* **コンテンツの提供について**: 本アプリは、マンガやコミックなどのコンテンツ、およびアーカイブのダウンロードソースを一切提供・ホスト・推奨することはありません。
+* **ユーザーの責任**: アプリ内で開くコンテンツについては、すべてユーザーご自身の責任において管理・利用してください。
+* **責任の制限**: ユーザーが使用する閲覧素材やダウンロード元に起因する著作権侵害や法的トラブルについて、開発者は一切の責任を負いません。

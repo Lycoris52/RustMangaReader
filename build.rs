@@ -18,8 +18,10 @@ fn main() {
     let pdfium_dll_name = "pdfium.dll"; // for reading pdf
     let dav1d_dll_name = "dav1d.dll"; // for reading avif
     let setting_name = "settings.json";
-    // Copy Dll and setting files
+    let license = "LICENSE";
+    // Copy various necessary file
     fs::copy(&manifest_dir.join(pdfium_dll_name), target_dir.join(pdfium_dll_name)).expect("Failed to copy pdfium.dll to target directory");
     fs::copy(&manifest_dir.join(dav1d_dll_name), target_dir.join(dav1d_dll_name)).expect("Failed to copy dav1d.dll to target directory");
     fs::copy(&manifest_dir.join(setting_name), target_dir.join(setting_name)).expect("Failed to copy setting.json to target directory");
+    fs::copy(&manifest_dir.join(license), target_dir.join(license)).expect("Failed to copy setting.json to target directory");
 }

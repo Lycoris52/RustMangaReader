@@ -67,6 +67,12 @@ RustMangaReader is strictly a viewing utility.
 > * **User Responsibility**: Users are solely responsible for the content they open within the application.
 > * **No Liability**: The developer takes no responsibility for any copyright infringements or legal issues arising from the user's choice of reading material or download sources.
 
+### Third-Party Licenses 
+This software uses Pdfium for PDF rendering.
+
+    Pdfium is Copyright 2014 Google Inc. All rights reserved.
+    Licensed under the Apache License, Version 2.0 (the "License"). You may obtain a copy of the License at: http://www.apache.org/licenses/LICENSE-2.0
+
 Feel free to contact me if you have any requests or found any bugs.
 
 ---
@@ -138,3 +144,10 @@ MangaReaderは、あくまで閲覧専用のユーティリティソフトです
 * **コンテンツの提供について**: 本アプリは、マンガやコミックなどのコンテンツ、およびアーカイブのダウンロードソースを一切提供・ホスト・推奨することはありません。
 * **ユーザーの責任**: アプリ内で開くコンテンツについては、すべてユーザーご自身の責任において管理・利用してください。
 * **責任の制限**: ユーザーが使用する閲覧素材やダウンロード元に起因する著作権侵害や法的トラブルについて、開発者は一切の責任を負いません。
+  
+
+### サードパーティライセンス 
+本ソフトウェアでは、PDFのレンダリングに Pdfium を使用しています。
+
+    Pdfium は Google Inc. が著作権を有しています (Copyright 2014 Google Inc.)。
+    本ライブラリは Apache License, Version 2.0 に基づいて提供されています。ライセンスの詳細は以下をご確認ください：http://www.apache.org/licenses/LICENSE-2.0

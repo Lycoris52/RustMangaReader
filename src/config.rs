@@ -76,6 +76,7 @@ pub enum MangaAction {
     FullScreen,
     ViewMode,
     OpenFile,
+    ExitFullscreen,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
@@ -91,6 +92,7 @@ pub struct KeyConfig {
     pub fullscreen: Shortcut,
     pub view_mode: Shortcut,
     pub open_file: Shortcut,
+    pub exit_fullscreen: Shortcut,
 }
 
 impl Default for KeyConfig {
@@ -107,6 +109,7 @@ impl Default for KeyConfig {
             fullscreen: Shortcut::new(egui::Key::Enter, true, false, false),
             view_mode: Shortcut::new(egui::Key::Enter, false, false, false),
             open_file: Shortcut::new(egui::Key::O, false, false, false),
+            exit_fullscreen: Shortcut::new(egui::Key::Escape, false, false, false),
         }
     }
 }
@@ -122,6 +125,7 @@ pub struct AppSettings {
     pub enable_single_file_caching: bool,
     pub image_delay: u64,
     pub keys: KeyConfig,
+    pub show_top_bar: bool,
 }
 
 impl Default for AppSettings {
@@ -135,6 +139,7 @@ impl Default for AppSettings {
             enable_single_file_caching: true,
             image_delay: 0,
             keys: KeyConfig::default(),
+            show_top_bar: true,
         }
     }
 }

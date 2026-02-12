@@ -38,6 +38,7 @@ pub struct MangaReader {
     source_mode: SourceMode,
     last_image_switch_time: Instant,
     zoom_factor: f32,
+    is_scrubbing: bool,
 }
 
 impl MangaReader {
@@ -80,6 +81,7 @@ impl MangaReader {
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             zoom_factor: 1.0,
+            is_scrubbing: false,
         }
     }
 
@@ -186,12 +188,16 @@ impl MangaReader {
     fn update_buffers(&mut self, ctx: &egui::Context) {
         let idx = self.current_index;
 
+        if self.is_scrubbing {
+            return;
+        }
+
         if self.zip_path.is_none() {
-            return
+            return;
         }
 
         if self.zoom_factor != 1.0 {
-            return
+            return;
         }
 
         // Only update if we moved OR if the buffers were recently consumed
@@ -661,9 +667,28 @@ impl MangaReader {
         });
     }
 
-
     fn is_single_page(&self) -> bool {
         self.config.page_view_options == PageViewOptions::Single
+    }
+
+    fn change_shifted_mode(&mut self, ctx: &egui::Context) {
+        self.is_shifted = !self.is_shifted;
+
+        // Adjust current_index to keep the view consistent
+        if self.is_shifted {
+            if self.current_index == 0 { self.current_index = 0; }
+            else if self.current_index % 2 == 0 { self.current_index += 1; }
+        } else {
+            // Return to even index alignment
+            self.current_index = self.current_index.saturating_sub(1);
+            if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
+        }
+
+        self.reset_buffer();
+        self.texture_cache.clear();
+        self.textures = self.load_pair(self.current_index, ctx);
+        let msg = if self.is_shifted { "Mode: Odd Page" } else { "Mode: Even Page" };
+        self.show_fading_error(msg);
     }
 }
 
@@ -696,6 +721,7 @@ impl eframe::App for MangaReader {
                             "Fullscreen" => self.config.keys.fullscreen = new_shortcut,
                             "View Mode" => self.config.keys.view_mode = new_shortcut,
                             "Open File" => self.config.keys.open_file = new_shortcut,
+                            "Exit Fullscreen" => self.config.keys.exit_fullscreen = new_shortcut,
                             _ => {}
                         }
                         self.binding_action = None;
@@ -726,6 +752,7 @@ impl eframe::App for MangaReader {
                 if is_triggered(&keys.fullscreen) { action_to_run = MangaAction::FullScreen; }
                 if is_triggered(&keys.view_mode) { action_to_run = MangaAction::ViewMode; }
                 if is_triggered(&keys.open_file) { action_to_run = MangaAction::OpenFile; }
+                if is_triggered(&keys.exit_fullscreen) { action_to_run = MangaAction::ExitFullscreen; }
             });
         }
 
@@ -743,25 +770,13 @@ impl eframe::App for MangaReader {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
             },
             MangaAction::ViewMode => {
-                self.is_shifted = !self.is_shifted;
-
-                // Adjust current_index to keep the view consistent
-                if self.is_shifted {
-                    if self.current_index == 0 { self.current_index = 0; }
-                    else if self.current_index % 2 == 0 { self.current_index += 1; }
-                } else {
-                    // Return to even index alignment
-                    self.current_index = self.current_index.saturating_sub(1);
-                    if self.current_index % 2 != 0 { self.current_index = self.current_index.saturating_sub(1); }
-                }
-
-                self.reset_buffer();
-                self.texture_cache.clear();
-                self.textures = self.load_pair(self.current_index, ctx);
-                let msg = if self.is_shifted { "Mode: Cover + Spreads" } else { "Mode: Standard Pairs" };
-                self.show_fading_error(msg); // Reusing your error logic to show the mode change
+                self.change_shifted_mode(ctx);
             },
             MangaAction::OpenFile => self.open_file_dialog(),
+            MangaAction::ExitFullscreen => {
+                self.is_fullscreen = !self.is_fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            },
             MangaAction::None => {},
         }
 
@@ -892,6 +907,7 @@ impl eframe::App for MangaReader {
                         ui.add_space(20.0);
                         ui.label(egui::RichText::new("Others:").color(egui::Color32::from_gray(200)).size(20.0).strong());
                         ui.separator();
+                        ui.checkbox(&mut self.config.show_top_bar, "Show Navigation Toolbar");
                         ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
                             .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
                         ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
@@ -935,6 +951,12 @@ impl eframe::App for MangaReader {
                                     ui.label("Odd/Even Page Start:");
                                     render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
                                     ui.end_row();
+                                    ui.label("Open File:");
+                                    render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action);
+                                    ui.end_row();
+                                    ui.label("Exit Fullscreen:");
+                                    render_binding_button(ui, "Exit Fullscreen", &mut self.config.keys.exit_fullscreen, &mut self.binding_action);
+                                    ui.end_row();
                                 });
                             });
 
@@ -976,6 +998,79 @@ impl eframe::App for MangaReader {
                     self.config.show_settings = !self.config.show_settings;
                 }
             });
+
+        if self.config.show_top_bar && !self.is_fullscreen {
+            egui::TopBottomPanel::top("top_toolbar")
+                .frame(egui::Frame::none().fill(egui::Color32::from_gray(30)).inner_margin(4.0))
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        // --- Folder Navigation ---
+                        if ui.button("📁⏮").on_hover_text("Prev Folder").clicked() { self.prev_folder(ctx); }
+                        if ui.button("📁⏭").on_hover_text("Next Folder").clicked() { self.next_folder(ctx); }
+                        ui.separator();
+
+                        // --- File Navigation ---
+                        if ui.button("📦⏮").on_hover_text("Prev File").clicked() { self.prev_zip(ctx); }
+                        if ui.button("📦⏭").on_hover_text("Next File").clicked() { self.next_zip(ctx); }
+                        ui.separator();
+
+                        // --- Page Navigation ---
+                        if ui.button("⏮").on_hover_text("First Page").clicked() { self.go_to_first_page(ctx); }
+                        if ui.button("◀").on_hover_text("Prev Page").clicked() { self.prev_page(ctx); }
+
+                        // Page Indicator in middle
+                        ui.label(format!("{} / {}", self.current_index + 1, self.image_files.len()));
+
+                        if ui.button("▶").on_hover_text("Next Page").clicked() { self.next_page(ctx); }
+                        if ui.button("⏭").on_hover_text("Last Page").clicked() { self.go_to_last_page(ctx); }
+                        ui.separator();
+
+                        // --- View Toggles ---
+                        let shift_label = if self.is_shifted { "Odd Page" } else { "Even Page" };
+                        if ui.button(shift_label).clicked() {
+                            self.change_shifted_mode(ctx);
+                        }
+
+                        if ui.button("📺").on_hover_text("Toggle Fullscreen").clicked() {
+                            self.is_fullscreen = !self.is_fullscreen;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                        }
+                        ui.separator();
+                        if ui.button("Open File").clicked() { self.open_file_dialog(); }
+
+                        ui.separator();
+                        // --- THE SLIDER ---
+                        // We use a 1-based slider for better user experience
+                        let mut page_val = self.current_index + 1;
+                        let max_pages = self.image_files.len().max(1);
+
+                        // ui.available_width() ensures the slider stretches to fill the gap
+                        let slider_width = ui.available_width() / 3.0; // Reserve space for right-side buttons
+
+                        let style = ui.style_mut();
+                        style.spacing.slider_width = slider_width;
+
+                        let slider = ui.add(
+                            egui::Slider::new(&mut page_val, 1..=max_pages)
+                                .show_value(true)
+                                .text(format!("/ {}", max_pages))
+                        );
+                        self.is_scrubbing = slider.dragged();
+                        if slider.changed() {
+                            self.current_index = page_val - 1;
+                            self.reset_buffer();
+                            self.textures = self.load_pair(self.current_index, ctx);
+                        }
+
+                        // --- Hide Button ---
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("❌").on_hover_text("Hide Toolbar (Re-enable in Settings)").clicked() {
+                                self.config.show_top_bar = false;
+                            }
+                        });
+                    });
+                });
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(40)))

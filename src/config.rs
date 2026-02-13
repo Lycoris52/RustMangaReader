@@ -126,6 +126,7 @@ pub struct AppSettings {
     pub image_delay: u64,
     pub keys: KeyConfig,
     pub show_top_bar: bool,
+    pub enable_auto_image_byte_fix: bool,
 }
 
 impl Default for AppSettings {
@@ -140,6 +141,7 @@ impl Default for AppSettings {
             image_delay: 0,
             keys: KeyConfig::default(),
             show_top_bar: true,
+            enable_auto_image_byte_fix: true,
         }
     }
 }

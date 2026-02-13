@@ -294,7 +294,10 @@ impl MangaReader {
                         None
                     };
 
-                    if let Some(buffer) = bytes {
+                    if let Some(mut buffer) = bytes {
+                        if self.config.enable_auto_image_byte_fix {
+                            buffer = self.strip_adobe_app14_if_invalid(&buffer);
+                        }
                         match image::guess_format(&buffer) {
                             Ok(format) => {
                                 if let Ok(img) = image::load_from_memory_with_format(&buffer, format) {
@@ -314,6 +317,78 @@ impl MangaReader {
             }
         }
         pair
+    }
+
+    fn strip_adobe_app14_if_invalid(&self, bytes: &[u8]) -> Vec<u8> {
+        let mut i = 0;
+        let mut out = Vec::with_capacity(bytes.len());
+
+        // Copy SOI first (must be first two bytes)
+        if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+            return bytes.to_vec(); // not a valid jpeg
+        }
+
+        out.extend_from_slice(&bytes[0..2]);
+        i = 2;
+
+        while i < bytes.len() {
+            if i + 1 >= bytes.len() {
+                break;
+            }
+
+            // Every marker must start with FF
+            if bytes[i] != 0xFF {
+                // Start of entropy data (after SOS)
+                out.extend_from_slice(&bytes[i..]);
+                break;
+            }
+
+            let marker = bytes[i + 1];
+
+            // Standalone markers (no length)
+            if marker == 0xD9 || (0xD0..=0xD7).contains(&marker) {
+                out.push(0xFF);
+                out.push(marker);
+                i += 2;
+                continue;
+            }
+
+            // SOS marker → copy rest of file and stop parsing
+            if marker == 0xDA {
+                out.extend_from_slice(&bytes[i..]);
+                break;
+            }
+
+            if i + 4 > bytes.len() {
+                break;
+            }
+
+            let length =
+                u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+
+            let segment_end = i + 2 + length;
+
+            if segment_end > bytes.len() {
+                break;
+            }
+
+            // If APP14 (FF EE)
+            if marker == 0xEE
+                && length >= 14
+                && &bytes[i + 4..i + 9] == b"Adobe"
+            {
+                println!("Stripping Adobe APP14 segment");
+                // Skip this segment entirely
+                i = segment_end;
+                continue;
+            }
+
+            // Otherwise copy full segment
+            out.extend_from_slice(&bytes[i..segment_end]);
+            i = segment_end;
+        }
+
+        out
     }
 
     /// Helper to render a specific page
@@ -910,7 +985,9 @@ impl eframe::App for MangaReader {
                         ui.separator();
                         ui.checkbox(&mut self.config.show_top_bar, "Show Navigation Toolbar");
                         ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
-                            .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice load image speed by about 35%.");
+                            .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice image load speed by about 30%.");
+                        ui.checkbox(&mut self.config.enable_auto_image_byte_fix, "Enable Auto Image Bytes fix.")
+                            .on_hover_text("Some image come with malformed format, enable this will sometimes fix the image, but will sacrifice image load speed by about 10%.");
                         ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
                             .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
                         ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)

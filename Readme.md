@@ -4,6 +4,9 @@
 
 RustMangaReader is a high-performance, lightweight **offline** manga and comic viewer built in Rust. \
 Designed specifically for the Windows, it focuses on providing a fluid, lag-free reading experience through preloading and native rendering.
+
+# <img src="./src/assets/mangaviewer.png" alt="app image" width="500">
+
 ### ⚡ Key Features
 
 * **Built for Speed**: Uses a dual-buffer system to preload upcoming and previous pages in the background, ensuring near-instant page turns.

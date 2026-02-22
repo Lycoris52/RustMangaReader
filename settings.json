@@ -72,6 +72,14 @@
       "ctrl": false,
       "alt": false,
       "shift": false
+    },
+    "exit_fullscreen": {
+      "key": "Escape",
+      "ctrl": false,
+      "alt": false,
+      "shift": false
     }
-  }
+  },
+  "show_top_bar": true,
+  "enable_auto_image_byte_fix": true
 }

@@ -44,9 +44,14 @@ pub struct MangaReader {
 impl MangaReader {
     pub fn new(_cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         font::setup_custom_fonts(&_cc.egui_ctx);
-        let config: AppSettings = if let Ok(data) = std::fs::read_to_string("settings.json") {
+        let mut exe_path = env::current_exe().expect("Failed to get current exe path");
+        exe_path.pop();
+        exe_path.push("settings.json");
+        eprintln!("Loading setting from : {:?}", exe_path.to_str());
+        let config: AppSettings = if let Ok(data) = std::fs::read_to_string(exe_path) {
             // add |_| here to accept the error argument but ignore it
-            serde_json::from_str(&data).unwrap_or_else(|_| {
+            serde_json::from_str(&data).unwrap_or_else(|e| {
+                eprintln!("Error is : {:?}", e);
                 eprintln!("Failed to parse settings.json, using defaults.");
                 AppSettings::default()
             })
@@ -320,7 +325,7 @@ impl MangaReader {
     }
 
     fn strip_adobe_app14_if_invalid(&self, bytes: &[u8]) -> Vec<u8> {
-        let mut i = 0;
+        let mut i = 2;
         let mut out = Vec::with_capacity(bytes.len());
 
         // Copy SOI first (must be first two bytes)
@@ -329,7 +334,6 @@ impl MangaReader {
         }
 
         out.extend_from_slice(&bytes[0..2]);
-        i = 2;
 
         while i < bytes.len() {
             if i + 1 >= bytes.len() {

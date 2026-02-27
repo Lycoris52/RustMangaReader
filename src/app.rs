@@ -773,6 +773,16 @@ impl MangaReader {
 
 impl eframe::App for MangaReader {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // load file if it is dropped on screen
+        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(df) = dropped_files.first() {
+            if let Some(path) = &df.path {
+                self.load_source(path.clone(), ctx);
+            } else if let Some(_bytes) = &df.bytes {
+                self.show_fading_error("Dropped file has no path (bytes only). Web support not implemented.");
+            }
+        }
+
         let mut action_to_run = MangaAction::None;
 
         // REBINDING LOGIC
@@ -797,10 +807,10 @@ impl eframe::App for MangaReader {
                             "Previous File" => self.config.keys.prev_file = new_shortcut,
                             "Next Folder" => self.config.keys.next_folder = new_shortcut,
                             "Previous Folder" => self.config.keys.prev_folder = new_shortcut,
-                            "Fullscreen" => self.config.keys.fullscreen = new_shortcut,
+                            "Toggle Fullscreen" => self.config.keys.fullscreen = new_shortcut,
                             "View Mode" => self.config.keys.view_mode = new_shortcut,
                             "Open File" => self.config.keys.open_file = new_shortcut,
-                            "Exit Fullscreen" => self.config.keys.exit_fullscreen = new_shortcut,
+                            "Quit App" => self.config.keys.quit_app = new_shortcut,
                             _ => {}
                         }
                         self.binding_action = None;
@@ -831,7 +841,7 @@ impl eframe::App for MangaReader {
                 if is_triggered(&keys.fullscreen) { action_to_run = MangaAction::FullScreen; }
                 if is_triggered(&keys.view_mode) { action_to_run = MangaAction::ViewMode; }
                 if is_triggered(&keys.open_file) { action_to_run = MangaAction::OpenFile; }
-                if is_triggered(&keys.exit_fullscreen) { action_to_run = MangaAction::ExitFullscreen; }
+                if is_triggered(&keys.quit_app) { action_to_run = MangaAction::QuitApp; }
             });
         }
 
@@ -851,11 +861,11 @@ impl eframe::App for MangaReader {
             MangaAction::ViewMode => {
                 self.change_shifted_mode(ctx);
             },
-            MangaAction::OpenFile => self.open_file_dialog(),
-            MangaAction::ExitFullscreen => {
-                self.is_fullscreen = !self.is_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            MangaAction::QuitApp => {
+                self.save_settings();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             },
+            MangaAction::OpenFile => self.open_file_dialog(),
             MangaAction::None => {},
         }
 
@@ -1028,7 +1038,7 @@ impl eframe::App for MangaReader {
                                     render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action);
                                     ui.end_row();
                                     ui.label("Toggle Fullscreen:");
-                                    render_binding_button(ui, "Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
+                                    render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
                                     ui.end_row();
                                     ui.label("Odd/Even Page Start:");
                                     render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
@@ -1036,8 +1046,8 @@ impl eframe::App for MangaReader {
                                     ui.label("Open File:");
                                     render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action);
                                     ui.end_row();
-                                    ui.label("Exit Fullscreen:");
-                                    render_binding_button(ui, "Exit Fullscreen", &mut self.config.keys.exit_fullscreen, &mut self.binding_action);
+                                    ui.label("Quit App:");
+                                    render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action);
                                     ui.end_row();
                                 });
                             });

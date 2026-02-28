@@ -16,6 +16,13 @@ pub enum PageViewOptions {
 }
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
+pub enum LastPageAction {
+    GotoNextFile,
+    ToFirstPage,
+    Nothing,
+}
+
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum ResizeMethod {
     None,       // Use original resolution
     Nearest,    // Nearest Neighbor (fastest)
@@ -127,6 +134,7 @@ pub struct AppSettings {
     pub keys: KeyConfig,
     pub show_top_bar: bool,
     pub enable_auto_image_byte_fix: bool,
+    pub last_page_action: LastPageAction,
 }
 
 impl Default for AppSettings {
@@ -142,6 +150,7 @@ impl Default for AppSettings {
             keys: KeyConfig::default(),
             show_top_bar: true,
             enable_auto_image_byte_fix: true,
+            last_page_action: LastPageAction::GotoNextFile,
         }
     }
 }

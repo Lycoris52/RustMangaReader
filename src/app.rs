@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use egui::{Align, Direction, PointerButton, Rect};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
-use crate::config::{AppSettings, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
+use crate::config::{AppSettings, LastPageAction, MangaAction, PageViewOptions, ResizeMethod, Shortcut, SourceMode};
 use crate::font;
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 
@@ -606,8 +606,12 @@ impl MangaReader {
             }
             self.buffer_next = [None, None];
         } else {
-            // End of Zip list reached, try to find next zip ---
-            self.next_zip(ctx);
+            // End of Zip list reached, do the last page action
+            match self.config.last_page_action {
+                LastPageAction::GotoNextFile => self.next_zip(ctx),
+                LastPageAction::ToFirstPage => self.go_to_first_page(ctx),
+                LastPageAction::Nothing => self.show_fading_error("No more page in files")
+            }
         }
         self.page_indicator_time = Some(Instant::now());
     }
@@ -631,8 +635,12 @@ impl MangaReader {
             }
             self.buffer_prev = [None, None];
         } else {
-            //e are at the start of the Zip, move to PREVIOUS ZIP ---
-            self.prev_zip(ctx);
+            // we are at the start of the Zip, do the last page action
+            match self.config.last_page_action {
+                LastPageAction::GotoNextFile => self.prev_zip(ctx),
+                LastPageAction::ToFirstPage => self.go_to_last_page(ctx),
+                LastPageAction::Nothing => self.show_fading_error("This is the first page in files")
+            }
         }
         self.page_indicator_time = Some(Instant::now());
     }
@@ -965,6 +973,23 @@ impl eframe::App for MangaReader {
                             changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new("Single Page")).clicked();
                             changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new("Double Page(Right to Left")).clicked();
                             changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new("Double Page(Left to Right)")).clicked();
+
+                            if changed {
+                                self.reset_buffer();
+                                self.textures = self.load_pair(self.current_index, ctx);
+                                self.save_settings();
+                            }
+                        }
+
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new("Last Page Options:").color(egui::Color32::from_gray(200)).size(20.0).strong());
+                        ui.separator();
+
+                        {
+                            let mut changed = false;
+                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new("Go to Next File")).clicked();
+                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new("To First Page")).clicked();
+                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new("Do Nothing")).clicked();
 
                             if changed {
                                 self.reset_buffer();

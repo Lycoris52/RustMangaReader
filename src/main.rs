@@ -8,7 +8,7 @@ mod utils;
 use app::MangaReader;
 
 fn main() -> eframe::Result<()> {
-    let icon_data = include_bytes!("assets/icon256.png");
+    let icon_data = include_bytes!("assets/icon256.ico");
 
     let icon = image::load_from_memory(icon_data)
         .expect("Failed to load embedded icon")

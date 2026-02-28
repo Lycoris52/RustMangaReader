@@ -142,7 +142,7 @@ impl Default for AppSettings {
         Self {
             resize_method: ResizeMethod::Triangle,
             page_view_options: PageViewOptions::DoubleRL,
-            settings_width: 250.0,
+            settings_width: 300.0,
             show_settings: false,
             transparency_support: false,
             enable_single_file_caching: true,

@@ -916,7 +916,22 @@ impl eframe::App for MangaReader {
                 .resizable(true) // Enable mouse dragging
                 .default_width(self.config.settings_width)
                 .width_range(150.0..=500.0) // Constraints
-                .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(60)).inner_margin(10.0))
+                .frame({
+                    let v = ctx.style().visuals.clone();
+
+                    // Use theme colors instead of fixed gray.
+                    // Slight tint so it stands out from the main background in both modes.
+                    let fill = if v.dark_mode {
+                        v.window_fill.gamma_multiply(1.15)
+                    } else {
+                        v.window_fill.gamma_multiply(0.97)
+                    };
+
+                    egui::Frame::NONE
+                        .fill(fill)
+                        .stroke(v.window_stroke)
+                        .inner_margin(egui::Margin::same(10))
+                })
                 .show(ctx, |ui| {
                     // Update the stored width based on user dragging
                     self.config.settings_width = ui.available_width();
@@ -925,168 +940,198 @@ impl eframe::App for MangaReader {
                     ui.vertical_centered(|ui| {
                         ui.heading(
                             egui::RichText::new("Settings")
-                                .color(egui::Color32::from_gray(200)) // Example: Orange
                                 .strong()
                         );
                     });
                     ui.add_space(10.0);
-                    ui.separator();
+                    separator_pct(ui);
 
-                    ui.vertical(|ui| {
-                        ui.add_space(10.0);
+                    // The rest becomes scrollable
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false; 2])       // don't shrink content; enable scrolling
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.add_space(10.0);
 
-                        // [Open File] Button
-                        if ui.add_sized([ui.available_width(), 30.0], egui::Button::new("📂 Open File")).clicked() {
-                            self.open_file_dialog();
-                        }
+                                // [Open File] Button
+                                if ui.add_sized([ui.available_width() * 0.94, 30.0], egui::Button::new("📂 Open File")).clicked() {
+                                    self.open_file_dialog();
+                                }
 
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Image Scaling Algorithm:").color(egui::Color32::from_gray(200)).size(20.0).strong());
-                        ui.separator();
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new("Image Scaling Algorithm:").size(20.0).strong());
+                                separator_pct(ui);
 
-                        let visuals = ui.visuals_mut();
-                        visuals.selection.bg_fill = egui::Color32::BLACK;
-                        visuals.override_text_color = Some(egui::Color32::from_gray(200));
+                                let visuals = ui.visuals_mut();
+                                //visuals.selection.bg_fill = egui::Color32::BLACK;
+                                visuals.override_text_color = None;
 
-                        {
-                            let mut changed = false;
-                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
-                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
-                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
-                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
-                            changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
+                                {
+                                    let mut changed = false;
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
 
-                            if changed {
-                                self.reset_buffer();
-                                self.texture_cache.clear();
-                                self.textures = self.load_pair(self.current_index, ctx);
-                                self.save_settings(); // Save when algorithm changes
-                            }
-                        }
+                                    if changed {
+                                        self.reset_buffer();
+                                        self.texture_cache.clear();
+                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.save_settings(); // Save when algorithm changes
+                                    }
+                                }
 
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Page Viewing Options:").color(egui::Color32::from_gray(200)).size(20.0).strong());
-                        ui.separator();
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new("Page Viewing Options:").size(20.0).strong());
+                                separator_pct(ui);
 
-                        {
-                            let mut changed = false;
-                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new("Single Page")).clicked();
-                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new("Double Page(Right to Left")).clicked();
-                            changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new("Double Page(Left to Right)")).clicked();
+                                {
+                                    let mut changed = false;
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new("Single Page")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new("Double Page(Right to Left")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new("Double Page(Left to Right)")).clicked();
 
-                            if changed {
-                                self.reset_buffer();
-                                self.textures = self.load_pair(self.current_index, ctx);
-                                self.save_settings();
-                            }
-                        }
+                                    if changed {
+                                        self.reset_buffer();
+                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.save_settings();
+                                    }
+                                }
 
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Last Page Options:").color(egui::Color32::from_gray(200)).size(20.0).strong());
-                        ui.separator();
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new("Last Page Options:").size(20.0).strong());
+                                separator_pct(ui);
 
-                        {
-                            let mut changed = false;
-                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new("Go to Next File")).clicked();
-                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new("To First Page")).clicked();
-                            changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new("Do Nothing")).clicked();
+                                {
+                                    let mut changed = false;
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new("Go to Next File")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new("To First Page")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new("Do Nothing")).clicked();
 
-                            if changed {
-                                self.reset_buffer();
-                                self.textures = self.load_pair(self.current_index, ctx);
-                                self.save_settings();
-                            }
-                        }
+                                    if changed {
+                                        self.reset_buffer();
+                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.save_settings();
+                                    }
+                                }
 
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Zoom:").color(egui::Color32::from_gray(200)).size(20.0).strong());
-                        ui.separator();
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new("Zoom:").size(20.0).strong());
+                                separator_pct(ui);
 
-                        let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text("Zoom x"));
-                        let is_scrubbing_zoom = zoom_slider.dragged();
-                        if zoom_slider.changed() && !is_scrubbing_zoom {
-                            // If we zoom, and we aren't in single page mode, force it (as per your requirement)
-                            if self.zoom_factor != 1.0 {
-                                self.reset_buffer();
-                                self.texture_cache.clear();
-                                self.textures = self.load_pair(self.current_index, ctx);
-                                self.config.page_view_options = PageViewOptions::Single;
-                            }
-                        }
+                                let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text("Zoom x"));
+                                let is_scrubbing_zoom = zoom_slider.dragged();
+                                if zoom_slider.changed() && !is_scrubbing_zoom {
+                                    // If we zoom, and we aren't in single page mode, force it (as per your requirement)
+                                    if self.zoom_factor != 1.0 {
+                                        self.reset_buffer();
+                                        self.texture_cache.clear();
+                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.config.page_view_options = PageViewOptions::Single;
+                                    }
+                                }
 
-                        if ui.button(egui::RichText::new("Reset Zoom").color(egui::Color32::from_gray(60))).clicked() {
-                            self.zoom_factor = 1.0;
-                        }
-                        ui.separator();
+                                if ui.button(egui::RichText::new("Reset Zoom")).clicked() {
+                                    self.zoom_factor = 1.0;
+                                }
+                                separator_pct(ui);
 
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new("Others:").color(egui::Color32::from_gray(200)).size(20.0).strong());
-                        ui.separator();
-                        ui.checkbox(&mut self.config.show_top_bar, "Show Navigation Toolbar");
-                        ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
-                            .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice image load speed by about 30%.");
-                        ui.checkbox(&mut self.config.enable_auto_image_byte_fix, "Enable Auto Image Bytes fix.")
-                            .on_hover_text("Some image come with malformed format, enable this will sometimes fix the image, but will sacrifice image load speed by about 10%.");
-                        ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
-                            .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
-                        ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)
-                            .text("Image Delay (ms)")).on_hover_text("Delay time in between before the next image shown. Useful when holding next/prev image button.");
-                        ui.add_space(20.0);
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new("Others:").size(20.0).strong());
+                                separator_pct(ui);
+                                ui.checkbox(&mut self.config.show_top_bar, "Show Navigation Toolbar");
+                                ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
+                                    .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice image load speed by about 30%.");
+                                ui.checkbox(&mut self.config.enable_auto_image_byte_fix, "Enable Auto Image Bytes fix.")
+                                    .on_hover_text("Some image come with malformed format, enable this will sometimes fix the image, but will sacrifice image load speed by about 10%.");
+                                ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
+                                    .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
+                                ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)
+                                    .text("Image Delay (ms)")).on_hover_text("Delay time in between before the next image shown. Useful when holding next/prev image button.");
+                                ui.add_space(20.0);
 
-                        egui::CollapsingHeader::new(egui::RichText::new("Key Config").color(egui::Color32::from_gray(200)).size(20.0).strong())
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.separator();
-                                egui::Grid::new("key_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                    ui.label("Next Page:");
-                                    render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Previous Page:");
-                                    render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Go to First Page:");
-                                    render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Go to Last Page:");
-                                    render_binding_button(ui, "Last Page", &mut self.config.keys.last_page, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Next File:");
-                                    render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Previous File:");
-                                    render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Next Folder:");
-                                    render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Previous Folder:");
-                                    render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Toggle Fullscreen:");
-                                    render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Odd/Even Page Start:");
-                                    render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Open File:");
-                                    render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action);
-                                    ui.end_row();
-                                    ui.label("Quit App:");
-                                    render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action);
-                                    ui.end_row();
-                                });
-                            });
+                                egui::CollapsingHeader::new(egui::RichText::new("Key Config").size(20.0).strong())
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        separator_pct(ui);
+                                        egui::Grid::new("key_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
+                                            ui.label("Next Page:");
+                                            render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Previous Page:");
+                                            render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Go to First Page:");
+                                            render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Go to Last Page:");
+                                            render_binding_button(ui, "Last Page", &mut self.config.keys.last_page, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Next File:");
+                                            render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Previous File:");
+                                            render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Next Folder:");
+                                            render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Previous Folder:");
+                                            render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Toggle Fullscreen:");
+                                            render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Odd/Even Page Start:");
+                                            render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Open File:");
+                                            render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action);
+                                            ui.end_row();
+                                            ui.label("Quit App:");
+                                            render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action);
+                                            ui.end_row();
+                                        });
+                                        separator_pct(ui);
+                                    });
 
-                        // Helper function to keep the UI code clean
-                        fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<String>) {
-                            let is_binding = binding.as_deref() == Some(id);
-                            let text = if is_binding { "Listening...".to_string() } else { shortcut.format() };
+                                ui.add_space(50.0);
+                        });
 
-                            if ui.button(egui::RichText::new(text).color(egui::Color32::from_gray(60))).clicked() {
-                                *binding = Some(id.to_string());
-                            }
-                        }
+
                     });
+                    fn separator_pct(ui: &mut egui::Ui) {
+                        let pct = 0.9;
+
+                        let spacing = ui.spacing();
+                        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+
+                        // Allocate a thin horizontal area (like separator does)
+                        let desired_h = spacing.scroll.bar_width; // this is usually ~1.0
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), desired_h), egui::Sense::hover());
+
+                        // Compute a centered line that's pct of the available width
+                        let full_w = rect.width();
+                        let line_w = full_w * pct;
+
+                        let indent = 0.0;
+                        let x0 = rect.left() + indent;
+                        let x1 = (x0 + line_w).min(rect.right());
+                        let y  = rect.center().y;
+
+                        ui.painter().line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
+                    }
+
+                    // Helper function to keep the UI code clean
+                    fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<String>) {
+                        let is_binding = binding.as_deref() == Some(id);
+                        let text = if is_binding { "Listening...".to_string() } else { shortcut.format() };
+
+                        if ui.button(text).clicked() {
+                            *binding = Some(id.to_string());
+                        }
+                    }
                 });
         }
 

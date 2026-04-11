@@ -1,8 +1,9 @@
 use crate::config::{
     AppSettings, LastPageAction, MangaAction, MouseButton, MouseGesture, PageViewOptions,
-    ResizeMethod, Shortcut, SourceMode,
+    ResizeMethod, Shortcut, SourceMode, UiLanguage,
 };
 use crate::font;
+use crate::localize::{set_language, tr};
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 use eframe::egui;
 use egui::{Align, Direction, PointerButton, Rect};
@@ -71,6 +72,7 @@ impl MangaReader {
         } else {
             AppSettings::default()
         };
+        set_language(config.language);
 
         let (tx, rx) = channel();
         Self {
@@ -116,6 +118,31 @@ impl MangaReader {
         }
     }
 
+    fn language_label(&self, language: UiLanguage) -> &str {
+        match language {
+            UiLanguage::English => tr("language.english"),
+            UiLanguage::Japanese => tr("language.japanese"),
+        }
+    }
+
+    fn action_label(&self, action: MangaAction) -> &str {
+        match action {
+            MangaAction::None => tr("action.none"),
+            MangaAction::NextPage => tr("action.next_page"),
+            MangaAction::PrevPage => tr("action.prev_page"),
+            MangaAction::FirstPage => tr("action.first_page"),
+            MangaAction::LastPage => tr("action.last_page"),
+            MangaAction::NextFile => tr("action.next_file"),
+            MangaAction::PrevFile => tr("action.prev_file"),
+            MangaAction::NextFolder => tr("action.next_folder"),
+            MangaAction::PrevFolder => tr("action.prev_folder"),
+            MangaAction::FullScreen => tr("action.fullscreen"),
+            MangaAction::ViewMode => tr("action.view_mode"),
+            MangaAction::OpenFile => tr("action.open_file"),
+            MangaAction::QuitApp => tr("action.quit_app"),
+        }
+    }
+
     fn open_file_dialog(&mut self) {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_dialog_time) > std::time::Duration::from_millis(500) {
@@ -123,11 +150,12 @@ impl MangaReader {
             if !self.is_dialog_open {
                 self.is_dialog_open = true;
                 let sender = self.dialog_tx.clone();
+                let filter_label = tr("dialog.manga_files").to_owned();
 
                 std::thread::spawn(move || {
                     let file = rfd::FileDialog::new()
                         .add_filter(
-                            "Manga Files",
+                            &filter_label,
                             &[
                                 "zip", "cbz", "cbr", "rar", "png", "jpg", "jpeg", "bmp", "webp",
                                 "gif", "tiff", "tga", "avif", "pdf",
@@ -414,7 +442,7 @@ impl MangaReader {
                 continue;
             }
 
-            // SOS marker → copy rest of file and stop parsing
+            // SOS marker copy rest of file and stop parsing
             if marker == 0xDA {
                 out.extend_from_slice(&bytes[i..]);
                 break;
@@ -625,7 +653,8 @@ impl MangaReader {
         windows_natural_sort_strings(&mut images);
 
         if images.is_empty() {
-            self.show_fading_error("No images found in selection.");
+            let msg = tr("error.no_images_found").to_owned();
+            self.show_fading_error(&msg);
         } else {
             self.reset_buffer();
             self.texture_cache.clear();
@@ -691,7 +720,10 @@ impl MangaReader {
             match self.config.last_page_action {
                 LastPageAction::GotoNextFile => self.next_zip(ctx),
                 LastPageAction::ToFirstPage => self.go_to_first_page(ctx),
-                LastPageAction::Nothing => self.show_fading_error("No more page in files"),
+                LastPageAction::Nothing => {
+                    let msg = tr("error.no_more_pages").to_owned();
+                    self.show_fading_error(&msg);
+                }
             }
         }
         self.page_indicator_time = Some(Instant::now());
@@ -727,7 +759,8 @@ impl MangaReader {
                 LastPageAction::GotoNextFile => self.prev_zip(ctx),
                 LastPageAction::ToFirstPage => self.go_to_last_page(ctx),
                 LastPageAction::Nothing => {
-                    self.show_fading_error("This is the first page in files")
+                    let msg = tr("error.first_page").to_owned();
+                    self.show_fading_error(&msg)
                 }
             }
         }
@@ -746,7 +779,8 @@ impl MangaReader {
                 self.load_source(next_path, ctx);
             } else {
                 // NO MORE FILES - This is the fix
-                self.show_fading_error("No more zip files in folder.");
+                let msg = tr("error.no_more_zip_files").to_owned();
+                self.show_fading_error(&msg);
             }
         }
     }
@@ -762,7 +796,8 @@ impl MangaReader {
                 // We pass 'true' to load_zip so it knows to start at the end of the new file
                 self.load_source(prev_path, ctx);
             } else {
-                self.show_fading_error("No previous zip files in folder.");
+                let msg = tr("error.no_previous_zip_files").to_owned();
+                self.show_fading_error(&msg);
             }
         }
     }
@@ -774,12 +809,14 @@ impl MangaReader {
         if let Some(dir) = next_dir {
             let zips = self.scan_folder(&*dir);
             if zips.is_empty() {
-                self.show_fading_error("No Archive found in next folder.");
+                let msg = tr("error.no_archive_next_folder").to_owned();
+                self.show_fading_error(&msg);
             } else {
                 self.load_source(zips[0].clone(), ctx);
             }
         } else {
-            self.show_fading_error("No next directory found.");
+            let msg = tr("error.no_next_directory").to_owned();
+            self.show_fading_error(&msg);
         }
     }
 
@@ -790,12 +827,14 @@ impl MangaReader {
         if let Some(dir) = prev_dir {
             let zips = self.scan_folder(&*dir);
             if zips.is_empty() {
-                self.show_fading_error("No Archive found in previous folder.");
+                let msg = tr("error.no_archive_prev_folder").to_owned();
+                self.show_fading_error(&msg);
             } else {
                 self.load_source(zips[0].clone(), ctx);
             }
         } else {
-            self.show_fading_error("No previous directory found.");
+            let msg = tr("error.no_previous_directory").to_owned();
+            self.show_fading_error(&msg);
         }
     }
 
@@ -1095,9 +1134,9 @@ impl MangaReader {
         self.texture_cache.clear();
         self.textures = self.load_pair(self.current_index, ctx);
         let msg = if self.is_shifted {
-            "Mode: Odd Page"
+            tr("mode.odd_page")
         } else {
-            "Mode: Even Page"
+            tr("mode.even_page")
         };
         self.show_fading_error(msg);
     }
@@ -1105,15 +1144,16 @@ impl MangaReader {
 
 impl eframe::App for MangaReader {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        set_language(self.config.language);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(tr("app.title").to_owned()));
+
         // load file if it is dropped on screen
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(df) = dropped_files.first() {
             if let Some(path) = &df.path {
                 self.load_source(path.clone(), ctx);
             } else if let Some(_bytes) = &df.bytes {
-                self.show_fading_error(
-                    "Dropped file has no path (bytes only). Web support not implemented.",
-                );
+                self.show_fading_error(tr("error.dropped_bytes_only"));
             }
         }
 
@@ -1253,10 +1293,7 @@ impl eframe::App for MangaReader {
 
                     ui.add_space(10.0);
                     ui.vertical_centered(|ui| {
-                        ui.heading(
-                            egui::RichText::new("Settings")
-                                .strong()
-                        );
+                        ui.heading(egui::RichText::new(tr("settings.title")).strong());
                     });
                     ui.add_space(10.0);
                     separator_pct(ui);
@@ -1269,12 +1306,33 @@ impl eframe::App for MangaReader {
                                 ui.add_space(10.0);
 
                                 // [Open File] Button
-                                if ui.add_sized([ui.available_width() * 0.94, 30.0], egui::Button::new("📂 Open File")).clicked() {
+                                if ui
+                                    .add_sized(
+                                        [ui.available_width() * 0.94, 30.0],
+                                        egui::Button::new(tr("settings.open_file")),
+                                    )
+                                    .clicked()
+                                {
                                     self.open_file_dialog();
+                                }
+                                ui.add_space(20.0);
+                                ui.label(egui::RichText::new(tr("language.label")).size(20.0).strong());
+                                separator_pct(ui);
+                                let mut language_changed = false;
+                                let english_label = self.language_label(UiLanguage::English).to_owned();
+                                let japanese_label = self.language_label(UiLanguage::Japanese).to_owned();
+                                egui::ComboBox::from_id_salt("language_select")
+                                    .selected_text(self.language_label(self.config.language))
+                                    .show_ui(ui, |ui| {
+                                        language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::English, &english_label).changed();
+                                        language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::Japanese, &japanese_label).changed();
+                                    });
+                                if language_changed {
+                                    self.save_settings();
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new("Image Scaling Algorithm:").size(20.0).strong());
+                                ui.label(egui::RichText::new(tr("settings.image_scaling")).size(20.0).strong());
                                 separator_pct(ui);
 
                                 let visuals = ui.visuals_mut();
@@ -1283,11 +1341,11 @@ impl eframe::App for MangaReader {
 
                                 {
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new("None (Good for small image)")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new("Nearest (Fastest)")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new("Bilinear (Balance)")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new("Bicubic")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new("Lanczos3 (High Quality, Slow)")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new(tr("settings.scaling.none"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new(tr("settings.scaling.nearest"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new(tr("settings.scaling.triangle"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new(tr("settings.scaling.catmullrom"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new(tr("settings.scaling.lanczos3"))).clicked();
 
                                     if changed {
                                         self.reset_buffer();
@@ -1298,14 +1356,14 @@ impl eframe::App for MangaReader {
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new("Page Viewing Options:").size(20.0).strong());
+                                ui.label(egui::RichText::new(tr("settings.page_view")).size(20.0).strong());
                                 separator_pct(ui);
 
                                 {
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new("Single Page")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new("Double Page(Right to Left")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new("Double Page(Left to Right)")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new(tr("settings.page_view.single"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new(tr("settings.page_view.double_rl"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new(tr("settings.page_view.double_lr"))).clicked();
 
                                     if changed {
                                         self.reset_buffer();
@@ -1315,14 +1373,14 @@ impl eframe::App for MangaReader {
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new("Last Page Options:").size(20.0).strong());
+                                ui.label(egui::RichText::new(tr("settings.last_page")).size(20.0).strong());
                                 separator_pct(ui);
 
                                 {
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new("Go to Next File")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new("To First Page")).clicked();
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new("Do Nothing")).clicked();
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new(tr("settings.last_page.next_file"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new(tr("settings.last_page.first_page"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new(tr("settings.last_page.nothing"))).clicked();
 
                                     if changed {
                                         self.reset_buffer();
@@ -1332,10 +1390,10 @@ impl eframe::App for MangaReader {
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new("Zoom:").size(20.0).strong());
+                                ui.label(egui::RichText::new(tr("settings.zoom")).size(20.0).strong());
                                 separator_pct(ui);
 
-                                let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text("Zoom x"));
+                                let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text(tr("settings.zoom.slider")));
                                 let is_scrubbing_zoom = zoom_slider.dragged();
                                 if zoom_slider.changed() && !is_scrubbing_zoom {
                                     // If we zoom, and we aren't in single page mode, force it (as per your requirement)
@@ -1347,76 +1405,77 @@ impl eframe::App for MangaReader {
                                     }
                                 }
 
-                                if ui.button(egui::RichText::new("Reset Zoom")).clicked() {
+                                if ui.button(egui::RichText::new(tr("settings.zoom.reset"))).clicked() {
                                     self.zoom_factor = 1.0;
                                 }
                                 separator_pct(ui);
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new("Others:").size(20.0).strong());
+                                ui.label(egui::RichText::new(tr("settings.others")).size(20.0).strong());
                                 separator_pct(ui);
-                                ui.checkbox(&mut self.config.show_top_bar, "Show Navigation Toolbar");
-                                ui.checkbox(&mut self.config.transparency_support, "Support Transparent Image")
-                                    .on_hover_text("Manga normally does not have transparent image, enable this will sacrifice image load speed by about 30%.");
-                                ui.checkbox(&mut self.config.enable_auto_image_byte_fix, "Enable Auto Image Bytes fix.")
-                                    .on_hover_text("Some image come with malformed format, enable this will sometimes fix the image, but will sacrifice image load speed by about 10%.");
-                                ui.checkbox(&mut self.config.enable_single_file_caching, "Enable caching on single file")
-                                    .on_hover_text("Cached the image files already load on a single zip file. Cached will be cleared after loading next zip.");
+                                ui.checkbox(&mut self.config.show_top_bar, tr("settings.show_toolbar"));
+                                ui.checkbox(&mut self.config.transparency_support, tr("settings.transparency"))
+                                    .on_hover_text(tr("settings.transparency.tooltip"));
+                                ui.checkbox(&mut self.config.enable_auto_image_byte_fix, tr("settings.auto_image_fix"))
+                                    .on_hover_text(tr("settings.auto_image_fix.tooltip"));
+                                ui.checkbox(&mut self.config.enable_single_file_caching, tr("settings.single_file_cache"))
+                                    .on_hover_text(tr("settings.single_file_cache.tooltip"));
                                 ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)
-                                    .text("Image Delay (ms)")).on_hover_text("Delay time in between before the next image shown. Useful when holding next/prev image button.");
+                                    .text(tr("settings.image_delay"))).on_hover_text(tr("settings.image_delay.tooltip"));
                                 ui.add_space(20.0);
 
-                                egui::CollapsingHeader::new(egui::RichText::new("Key Config").size(20.0).strong())
+                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.key_config")).size(20.0).strong())
                                     .default_open(true)
                                     .show(ui, |ui| {
                                         separator_pct(ui);
+                                        let listening_text = tr("common.listening").to_owned();
                                         egui::Grid::new("key_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                            ui.label("Next Page:");
-                                            render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action);
+                                            ui.label(tr("settings.key.next_page"));
+                                            render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Previous Page:");
-                                            render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action);
+                                            ui.label(tr("settings.key.prev_page"));
+                                            render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Go to First Page:");
-                                            render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action);
+                                            ui.label(tr("settings.key.first_page"));
+                                            render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Go to Last Page:");
-                                            render_binding_button(ui, "Last Page", &mut self.config.keys.last_page, &mut self.binding_action);
+                                            ui.label(tr("settings.key.last_page"));
+                                            render_binding_button(ui, "Last Page", &mut self.config.keys.last_page, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Next File:");
-                                            render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action);
+                                            ui.label(tr("settings.key.next_file"));
+                                            render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Previous File:");
-                                            render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action);
+                                            ui.label(tr("settings.key.prev_file"));
+                                            render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Next Folder:");
-                                            render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action);
+                                            ui.label(tr("settings.key.next_folder"));
+                                            render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Previous Folder:");
-                                            render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action);
+                                            ui.label(tr("settings.key.prev_folder"));
+                                            render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Toggle Fullscreen:");
-                                            render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action);
+                                            ui.label(tr("settings.key.fullscreen"));
+                                            render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Odd/Even Page Start:");
-                                            render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action);
+                                            ui.label(tr("settings.key.view_mode"));
+                                            render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Open File:");
-                                            render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action);
+                                            ui.label(tr("settings.key.open_file"));
+                                            render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action, &listening_text);
                                             ui.end_row();
-                                            ui.label("Quit App:");
-                                            render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action);
+                                            ui.label(tr("settings.key.quit_app"));
+                                            render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action, &listening_text);
                                             ui.end_row();
                                         });
                                         separator_pct(ui);
                                     });
 
                                 ui.add_space(20.0);
-                                egui::CollapsingHeader::new(egui::RichText::new("Mouse Mapping").size(20.0).strong())
+                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.mouse_mapping")).size(20.0).strong())
                                     .default_open(true)
                                     .show(ui, |ui| {
                                         separator_pct(ui);
-                                        ui.label("Assign an action to each mouse gesture.");
+                                        ui.label(tr("settings.mouse_mapping.description"));
                                         ui.add_space(10.0);
                                         let mut mouse_changed = false;
                                         mouse_changed |= ui
@@ -1425,61 +1484,66 @@ impl eframe::App for MangaReader {
                                                     &mut self.config.double_click_threshold_ms,
                                                     100..=1000,
                                                 )
-                                                .text("Double Click Threshold (ms)"),
+                                                .text(tr("settings.double_click_threshold")),
                                             )
                                             .changed();
                                         ui.add_space(10.0);
+                                        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
+                                            .into_iter()
+                                            .map(|action| (action, self.action_label(action).to_owned()))
+                                            .collect();
+                                        let unassigned_label = tr("common.unassigned").to_owned();
                                         egui::Grid::new("mouse_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                            ui.label("Scroll Up:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_up", &mut self.config.mouse.scroll_up);
+                                            ui.label(tr("settings.mouse.scroll_up"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_up", &mut self.config.mouse.scroll_up, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Scroll Down:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_down", &mut self.config.mouse.scroll_down);
+                                            ui.label(tr("settings.mouse.scroll_down"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_down", &mut self.config.mouse.scroll_down, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 1 Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_click", &mut self.config.mouse.button1_click);
+                                            ui.label(tr("settings.mouse.button1_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_click", &mut self.config.mouse.button1_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 2 Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_click", &mut self.config.mouse.button2_click);
+                                            ui.label(tr("settings.mouse.button2_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_click", &mut self.config.mouse.button2_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 3 Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_click", &mut self.config.mouse.button3_click);
+                                            ui.label(tr("settings.mouse.button3_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_click", &mut self.config.mouse.button3_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 4 Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_click", &mut self.config.mouse.button4_click);
+                                            ui.label(tr("settings.mouse.button4_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_click", &mut self.config.mouse.button4_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 5 Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_click", &mut self.config.mouse.button5_click);
+                                            ui.label(tr("settings.mouse.button5_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_click", &mut self.config.mouse.button5_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 1 Double Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_double_click", &mut self.config.mouse.button1_double_click);
+                                            ui.label(tr("settings.mouse.button1_double_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_double_click", &mut self.config.mouse.button1_double_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 2 Double Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_double_click", &mut self.config.mouse.button2_double_click);
+                                            ui.label(tr("settings.mouse.button2_double_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_double_click", &mut self.config.mouse.button2_double_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 3 Double Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_double_click", &mut self.config.mouse.button3_double_click);
+                                            ui.label(tr("settings.mouse.button3_double_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_double_click", &mut self.config.mouse.button3_double_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 4 Double Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_double_click", &mut self.config.mouse.button4_double_click);
+                                            ui.label(tr("settings.mouse.button4_double_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_double_click", &mut self.config.mouse.button4_double_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 5 Double Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_double_click", &mut self.config.mouse.button5_double_click);
+                                            ui.label(tr("settings.mouse.button5_double_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_double_click", &mut self.config.mouse.button5_double_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 1 Long Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_long_click", &mut self.config.mouse.button1_long_click);
+                                            ui.label(tr("settings.mouse.button1_long_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_long_click", &mut self.config.mouse.button1_long_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 2 Long Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_long_click", &mut self.config.mouse.button2_long_click);
+                                            ui.label(tr("settings.mouse.button2_long_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_long_click", &mut self.config.mouse.button2_long_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 3 Long Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_long_click", &mut self.config.mouse.button3_long_click);
+                                            ui.label(tr("settings.mouse.button3_long_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_long_click", &mut self.config.mouse.button3_long_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 4 Long Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_long_click", &mut self.config.mouse.button4_long_click);
+                                            ui.label(tr("settings.mouse.button4_long_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_long_click", &mut self.config.mouse.button4_long_click, &action_options, &unassigned_label);
                                             ui.end_row();
-                                            ui.label("Mouse 5 Long Click:");
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_long_click", &mut self.config.mouse.button5_long_click);
+                                            ui.label(tr("settings.mouse.button5_long_click"));
+                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_long_click", &mut self.config.mouse.button5_long_click, &action_options, &unassigned_label);
                                             ui.end_row();
                                         });
                                         if mouse_changed {
@@ -1516,23 +1580,23 @@ impl eframe::App for MangaReader {
                     }
 
                     // Helper function to keep the UI code clean
-                    fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<BindingTarget>) {
+                    fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<BindingTarget>, listening_text: &str) {
                         let is_binding = matches!(binding, Some(BindingTarget::Keyboard(action)) if action == id);
-                        let text = if is_binding { "Listening...".to_string() } else { shortcut.format() };
+                        let text = if is_binding { listening_text.to_string() } else { shortcut.format() };
 
                         if ui.button(text).clicked() {
                             *binding = Some(BindingTarget::Keyboard(id.to_string()));
                         }
                     }
 
-                    fn render_mouse_action_dropdown(ui: &mut egui::Ui, id: &str, action: &mut MangaAction) -> bool {
+                    fn render_mouse_action_dropdown(ui: &mut egui::Ui, id: &str, action: &mut MangaAction, action_options: &[(MangaAction, String)], unassigned_label: &str) -> bool {
                         let previous = *action;
                         egui::ComboBox::from_id_salt(id)
-                            .selected_text(action.format())
+                            .selected_text(action_options.iter().find(|(option, _)| option == action).map(|(_, label)| label.as_str()).unwrap_or(unassigned_label))
                             .width(180.0)
                             .show_ui(ui, |ui| {
-                                for option in MangaAction::ALL {
-                                    ui.selectable_value(action, option, option.format());
+                                for (option, label) in action_options {
+                                    ui.selectable_value(action, *option, label);
                                 }
                             });
 
@@ -1586,28 +1650,28 @@ impl eframe::App for MangaReader {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         // --- Folder Navigation ---
-                        if ui.button("📁⏮").on_hover_text("Prev Folder").clicked() {
+                        if ui.button("📁⏮").on_hover_text(tr("toolbar.prev_folder")).clicked() {
                             self.prev_folder(ctx);
                         }
-                        if ui.button("📁⏭").on_hover_text("Next Folder").clicked() {
+                        if ui.button("📁⏭").on_hover_text(tr("toolbar.next_folder")).clicked() {
                             self.next_folder(ctx);
                         }
                         ui.separator();
 
                         // --- File Navigation ---
-                        if ui.button("📦⏮").on_hover_text("Prev File").clicked() {
+                        if ui.button("📦⏮").on_hover_text(tr("toolbar.prev_file")).clicked() {
                             self.prev_zip(ctx);
                         }
-                        if ui.button("📦⏭").on_hover_text("Next File").clicked() {
+                        if ui.button("📦⏭").on_hover_text(tr("toolbar.next_file")).clicked() {
                             self.next_zip(ctx);
                         }
                         ui.separator();
 
                         // --- Page Navigation ---
-                        if ui.button("⏮").on_hover_text("First Page").clicked() {
+                        if ui.button("⏮").on_hover_text(tr("toolbar.first_page")).clicked() {
                             self.go_to_first_page(ctx);
                         }
-                        if ui.button("◀").on_hover_text("Prev Page").clicked() {
+                        if ui.button("◀").on_hover_text(tr("toolbar.prev_page")).clicked() {
                             self.prev_page(ctx);
                         }
 
@@ -1618,32 +1682,32 @@ impl eframe::App for MangaReader {
                             self.image_files.len()
                         ));
 
-                        if ui.button("▶").on_hover_text("Next Page").clicked() {
+                        if ui.button("▶").on_hover_text(tr("toolbar.next_page")).clicked() {
                             self.next_page(ctx);
                         }
-                        if ui.button("⏭").on_hover_text("Last Page").clicked() {
+                        if ui.button("⏭").on_hover_text(tr("toolbar.last_page")).clicked() {
                             self.go_to_last_page(ctx);
                         }
                         ui.separator();
 
                         // --- View Toggles ---
                         let shift_label = if self.is_shifted {
-                            "Odd Page"
+                            tr("state.odd_page")
                         } else {
-                            "Even Page"
+                            tr("state.even_page")
                         };
                         if ui.button(shift_label).clicked() {
                             self.change_shifted_mode(ctx);
                         }
 
-                        if ui.button("📺").on_hover_text("Toggle Fullscreen").clicked() {
+                        if ui.button("📺").on_hover_text(tr("toolbar.fullscreen")).clicked() {
                             self.is_fullscreen = !self.is_fullscreen;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
                                 self.is_fullscreen,
                             ));
                         }
                         ui.separator();
-                        if ui.button("Open File").clicked() {
+                        if ui.button(tr("toolbar.open_file")).clicked() {
                             self.open_file_dialog();
                         }
 
@@ -1673,10 +1737,7 @@ impl eframe::App for MangaReader {
 
                         // --- Hide Button ---
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button("❌")
-                                .on_hover_text("Hide Toolbar (Re-enable in Settings)")
-                                .clicked()
+                            if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked()
                             {
                                 self.config.show_top_bar = false;
                             }
@@ -1797,7 +1858,7 @@ impl eframe::App for MangaReader {
                     // the start screen
                     ui.centered_and_justified(|ui| {
                         let start_btn = egui::Button::new(
-                            egui::RichText::new("Click anywhere to open a Zip file")
+                            egui::RichText::new(tr("start.open_zip"))
                                 .size(20.0)
                                 .color(egui::Color32::from_gray(200)),
                         )

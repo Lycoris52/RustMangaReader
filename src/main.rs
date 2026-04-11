@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app;
 mod config;
 mod font;
-mod app;
 mod utils;
 
 use app::MangaReader;
@@ -24,18 +24,16 @@ fn main() -> eframe::Result<()> {
             .with_maximized(true)
             .with_decorations(true)
             .with_icon(std::sync::Arc::new(egui::IconData {
-            rgba: icon.into_raw(),
-            width,
-            height,
-        })),
+                rgba: icon.into_raw(),
+                width,
+                height,
+            })),
         ..Default::default()
     };
 
     eframe::run_native(
         "Rust Manga Reader for Windows - Productivity",
         native_options,
-        Box::new(|cc| {
-            Ok(Box::new(MangaReader::new(cc, initial_path)))
-        }),
+        Box::new(|cc| Ok(Box::new(MangaReader::new(cc, initial_path)))),
     )
 }

@@ -1,0 +1,2 @@
+[env]
+PKG_CONFIG = { value = "pkg-config.cmd", relative = true }

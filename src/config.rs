@@ -22,6 +22,18 @@ pub enum LastPageAction {
     Nothing,
 }
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
+pub enum UiLanguage {
+    English,
+    Japanese,
+}
+
+impl Default for UiLanguage {
+    fn default() -> Self {
+        Self::English
+    }
+}
+
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub enum ResizeMethod {
     None,       // Use original resolution
@@ -274,6 +286,8 @@ fn default_double_click_threshold_ms() -> u64 {
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
     pub page_view_options: PageViewOptions,
+    #[serde(default)]
+    pub language: UiLanguage,
     pub settings_width: f32,
     pub show_settings: bool,
     pub transparency_support: bool,
@@ -294,6 +308,7 @@ impl Default for AppSettings {
         Self {
             resize_method: ResizeMethod::Triangle,
             page_view_options: PageViewOptions::DoubleRL,
+            language: UiLanguage::English,
             settings_width: 300.0,
             show_settings: false,
             transparency_support: false,

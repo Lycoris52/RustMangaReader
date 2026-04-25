@@ -50,11 +50,3 @@ pub fn tr_for<'a>(language: UiLanguage, key: &'a str) -> &'a str {
 
     map.get(key).map(String::as_str).unwrap_or(key)
 }
-
-pub fn tr_args(key: &str, args: &[(&str, &str)]) -> String {
-    let mut text = tr(key).to_owned();
-    for (name, value) in args {
-        text = text.replace(&format!("{{{name}}}"), value);
-    }
-    text
-}

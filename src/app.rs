@@ -1,12 +1,13 @@
 use crate::config::{
-    AppSettings, LastPageAction, MangaAction, MouseButton, MouseGesture, PageViewOptions,
-    ResizeMethod, Shortcut, SourceMode, UiLanguage,
+    AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, LastPageAction, MangaAction,
+    MouseButton, MouseGesture, PageViewOptions, ResizeMethod, Shortcut, SourceMode, UiLanguage,
 };
 use crate::font;
 use crate::localize::{set_language, tr};
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 use eframe::egui;
 use egui::{Align, Direction, PointerButton, Rect};
+use gilrs::{Button as GilrsButton, EventType, Gilrs};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use std::env;
@@ -17,6 +18,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 const LONG_CLICK_DURATION: Duration = Duration::from_millis(450);
+const GAMEPAD_INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(800);
+const MOUSE_DRAG_THRESHOLD: f32 = 6.0;
 
 #[derive(Clone, PartialEq)]
 enum BindingTarget {
@@ -49,10 +52,15 @@ pub struct MangaReader {
     source_mode: SourceMode,
     last_image_switch_time: Instant,
     zoom_factor: f32,
+    pan_offset: egui::Vec2,
     is_scrubbing: bool,
     mouse_press_started: [Option<Instant>; 5],
+    mouse_press_origin: [Option<egui::Pos2>; 5],
     mouse_long_triggered: [bool; 5],
+    mouse_drag_suppressed: [bool; 5],
     pending_mouse_click: [Option<(Instant, MangaAction)>; 5],
+    gamepad: Option<Gilrs>,
+    gamepad_repeat_deadlines: [Option<Instant>; 16],
 }
 
 impl MangaReader {
@@ -101,10 +109,15 @@ impl MangaReader {
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             zoom_factor: 1.0,
+            pan_offset: egui::Vec2::ZERO,
             is_scrubbing: false,
             mouse_press_started: [None; 5],
+            mouse_press_origin: [None; 5],
             mouse_long_triggered: [false; 5],
+            mouse_drag_suppressed: [false; 5],
             pending_mouse_click: [None; 5],
+            gamepad: Gilrs::new().ok(),
+            gamepad_repeat_deadlines: [None; 16],
         }
     }
 
@@ -130,6 +143,8 @@ impl MangaReader {
             MangaAction::None => tr("action.none"),
             MangaAction::NextPage => tr("action.next_page"),
             MangaAction::PrevPage => tr("action.prev_page"),
+            MangaAction::OneNextPage => tr("action.one_next_page"),
+            MangaAction::OnePrevPage => tr("action.one_prev_page"),
             MangaAction::FirstPage => tr("action.first_page"),
             MangaAction::LastPage => tr("action.last_page"),
             MangaAction::NextFile => tr("action.next_file"),
@@ -140,6 +155,27 @@ impl MangaReader {
             MangaAction::ViewMode => tr("action.view_mode"),
             MangaAction::OpenFile => tr("action.open_file"),
             MangaAction::QuitApp => tr("action.quit_app"),
+        }
+    }
+
+    fn gamepad_button_label(&self, button: GamepadButton) -> &'static str {
+        match button {
+            GamepadButton::South => tr("settings.gamepad.south"),
+            GamepadButton::East => tr("settings.gamepad.east"),
+            GamepadButton::North => tr("settings.gamepad.north"),
+            GamepadButton::West => tr("settings.gamepad.west"),
+            GamepadButton::LeftTrigger => tr("settings.gamepad.left_trigger"),
+            GamepadButton::LeftTrigger2 => tr("settings.gamepad.left_trigger2"),
+            GamepadButton::RightTrigger => tr("settings.gamepad.right_trigger"),
+            GamepadButton::RightTrigger2 => tr("settings.gamepad.right_trigger2"),
+            GamepadButton::Select => tr("settings.gamepad.select"),
+            GamepadButton::Start => tr("settings.gamepad.start"),
+            GamepadButton::LeftThumb => tr("settings.gamepad.left_thumb"),
+            GamepadButton::RightThumb => tr("settings.gamepad.right_thumb"),
+            GamepadButton::DPadUp => tr("settings.gamepad.dpad_up"),
+            GamepadButton::DPadDown => tr("settings.gamepad.dpad_down"),
+            GamepadButton::DPadLeft => tr("settings.gamepad.dpad_left"),
+            GamepadButton::DPadRight => tr("settings.gamepad.dpad_right"),
         }
     }
 
@@ -167,6 +203,61 @@ impl MangaReader {
                 });
             }
         }
+    }
+
+    fn image_panel_background_color(&self) -> egui::Color32 {
+        let [r, g, b, a] = self.config.image_panel_background;
+        egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+    }
+
+    fn reset_pan(&mut self) {
+        self.pan_offset = egui::Vec2::ZERO;
+    }
+
+    fn effective_image_container_size(&self, ctx: &egui::Context) -> egui::Vec2 {
+        let content_rect = ctx.content_rect();
+        if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
+            content_rect.size()
+        } else {
+            egui::vec2(
+                ((content_rect.width() * 0.5) - self.config.spread_center_offset.abs()).max(1.0),
+                content_rect.height(),
+            )
+        }
+    }
+
+    fn image_draw_size(
+        &self,
+        tex: &egui::TextureHandle,
+        container_size: egui::Vec2,
+        zoom_factor: f32,
+    ) -> egui::Vec2 {
+        let tex_size = tex.size_vec2();
+        let aspect_ratio = tex_size.x / tex_size.y;
+
+        match self.config.image_sizing_mode {
+            ImageSizingMode::FitHeight => {
+                let height = container_size.y * zoom_factor;
+                egui::vec2(height * aspect_ratio, height)
+            }
+            ImageSizingMode::FitWidth => {
+                let width = container_size.x * zoom_factor;
+                egui::vec2(width, width / aspect_ratio)
+            }
+            ImageSizingMode::OriginalSize => tex_size * zoom_factor,
+        }
+    }
+
+    fn double_page_needs_drag(&self, rect: Rect) -> bool {
+        let page_size = egui::vec2(rect.width() * 0.5, rect.height());
+        self.textures[1]
+            .as_ref()
+            .map(|tex| self.image_draw_size(tex, page_size, self.zoom_factor))
+            .is_some_and(|size| size.x > page_size.x || size.y > page_size.y)
+            || self.textures[0]
+                .as_ref()
+                .map(|tex| self.image_draw_size(tex, page_size, self.zoom_factor))
+                .is_some_and(|size| size.x > page_size.x || size.y > page_size.y)
     }
 
     fn scan_folder(&mut self, current_parent: &Path) -> Vec<PathBuf> {
@@ -509,12 +600,31 @@ impl MangaReader {
         let resize_start = Instant::now();
         let filter = self.config.resize_method.to_filter();
         let processed_img = if let Some(filter_type) = filter {
-            let screen_size = ctx.content_rect();
-            let target_h = screen_size.height() as u32;
-            let aspect_ratio = img.width() as f32 / img.height() as f32;
-            let target_w = (target_h as f32 * aspect_ratio) as u32;
-            let factor = if self.zoom_factor != 1.0 { 3 } else { 1 };
-            img.resize(target_w * factor, target_h * factor, filter_type)
+            if self.config.image_sizing_mode == ImageSizingMode::OriginalSize {
+                img
+            } else {
+                let container_size = self.effective_image_container_size(ctx);
+                let aspect_ratio = img.width() as f32 / img.height() as f32;
+                let factor = if self.zoom_factor != 1.0 { 3 } else { 1 };
+                let (target_w, target_h) = match self.config.image_sizing_mode {
+                    ImageSizingMode::FitHeight => {
+                        let target_h = container_size.y.max(1.0) as u32;
+                        let target_w = (target_h as f32 * aspect_ratio) as u32;
+                        (target_w, target_h)
+                    }
+                    ImageSizingMode::FitWidth => {
+                        let target_w = container_size.x.max(1.0) as u32;
+                        let target_h = (target_w as f32 / aspect_ratio) as u32;
+                        (target_w, target_h)
+                    }
+                    ImageSizingMode::OriginalSize => unreachable!(),
+                };
+                img.resize(
+                    target_w.max(1) * factor,
+                    target_h.max(1) * factor,
+                    filter_type,
+                )
+            }
         } else {
             img // No resizing needed, return original
         };
@@ -658,6 +768,7 @@ impl MangaReader {
         } else {
             self.reset_buffer();
             self.texture_cache.clear();
+            self.reset_pan();
 
             // If we opened a specific image, find its index in the sorted list
             self.current_index = if let Some(target_name) = start_at_filename {
@@ -688,7 +799,7 @@ impl MangaReader {
         self.error_msg = Some((msg.to_string(), Instant::now()));
     }
 
-    fn next_page(&mut self, ctx: &egui::Context) {
+    fn next_page(&mut self, ctx: &egui::Context, force_step_one: bool) {
         if self.last_image_switch_time + Duration::from_millis(self.config.image_delay)
             > Instant::now()
         {
@@ -696,7 +807,12 @@ impl MangaReader {
         } else {
             self.last_image_switch_time = Instant::now();
         }
-        let step = if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
+        let step = if force_step_one {
+            // reset the buffer when force step 1 to prevent 2 images copy from buffer to active
+            self.buffer_next = [None, None];
+            self.buffer_prev = [None, None];
+            1
+        } else if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
             1
         } else {
             2
@@ -704,6 +820,7 @@ impl MangaReader {
 
         if self.current_index + step < self.image_files.len() {
             self.current_index += step;
+            self.reset_pan();
             // If the next pages are already in the buffer, swap them in
             if self.buffer_next[0].is_some() {
                 // Take the textures from the buffer and put them in the active slot
@@ -729,7 +846,7 @@ impl MangaReader {
         self.page_indicator_time = Some(Instant::now());
     }
 
-    fn prev_page(&mut self, ctx: &egui::Context) {
+    fn prev_page(&mut self, ctx: &egui::Context, force_step_one: bool) {
         if self.last_image_switch_time + Duration::from_millis(self.config.image_delay)
             > Instant::now()
         {
@@ -737,7 +854,12 @@ impl MangaReader {
         } else {
             self.last_image_switch_time = Instant::now();
         }
-        let step = if self.is_single_page() || (self.is_shifted && self.current_index == 1) {
+        let step = if force_step_one {
+            // reset the buffer when force step 1 to prevent 2 images copy from buffer to active
+            self.buffer_next = [None, None];
+            self.buffer_prev = [None, None];
+            1
+        } else if self.is_single_page() || (self.is_shifted && self.current_index == 1) {
             1
         } else {
             2
@@ -745,6 +867,7 @@ impl MangaReader {
 
         if self.current_index >= step {
             self.current_index -= step;
+            self.reset_pan();
             // Use the previous buffer textures
             if self.buffer_prev[0].is_some() {
                 self.buffer_next = std::mem::take(&mut self.textures);
@@ -918,6 +1041,147 @@ impl MangaReader {
         }
     }
 
+    fn map_gamepad_button(button: GilrsButton) -> Option<GamepadButton> {
+        match button {
+            GilrsButton::South => Some(GamepadButton::South),
+            GilrsButton::East => Some(GamepadButton::East),
+            GilrsButton::North => Some(GamepadButton::North),
+            GilrsButton::West => Some(GamepadButton::West),
+            GilrsButton::LeftTrigger => Some(GamepadButton::LeftTrigger),
+            GilrsButton::LeftTrigger2 => Some(GamepadButton::LeftTrigger2),
+            GilrsButton::RightTrigger => Some(GamepadButton::RightTrigger),
+            GilrsButton::RightTrigger2 => Some(GamepadButton::RightTrigger2),
+            GilrsButton::Select => Some(GamepadButton::Select),
+            GilrsButton::Start => Some(GamepadButton::Start),
+            GilrsButton::LeftThumb => Some(GamepadButton::LeftThumb),
+            GilrsButton::RightThumb => Some(GamepadButton::RightThumb),
+            GilrsButton::DPadUp => Some(GamepadButton::DPadUp),
+            GilrsButton::DPadDown => Some(GamepadButton::DPadDown),
+            GilrsButton::DPadLeft => Some(GamepadButton::DPadLeft),
+            GilrsButton::DPadRight => Some(GamepadButton::DPadRight),
+            _ => None,
+        }
+    }
+
+    fn gamepad_button_index(button: GamepadButton) -> usize {
+        match button {
+            GamepadButton::South => 0,
+            GamepadButton::East => 1,
+            GamepadButton::North => 2,
+            GamepadButton::West => 3,
+            GamepadButton::LeftTrigger => 4,
+            GamepadButton::LeftTrigger2 => 5,
+            GamepadButton::RightTrigger => 6,
+            GamepadButton::RightTrigger2 => 7,
+            GamepadButton::Select => 8,
+            GamepadButton::Start => 9,
+            GamepadButton::LeftThumb => 10,
+            GamepadButton::RightThumb => 11,
+            GamepadButton::DPadUp => 12,
+            GamepadButton::DPadDown => 13,
+            GamepadButton::DPadLeft => 14,
+            GamepadButton::DPadRight => 15,
+        }
+    }
+
+    fn gamepad_action_for_button(config: GamepadConfig, button: GamepadButton) -> MangaAction {
+        match button {
+            GamepadButton::South => config.south,
+            GamepadButton::East => config.east,
+            GamepadButton::North => config.north,
+            GamepadButton::West => config.west,
+            GamepadButton::LeftTrigger => config.left_trigger,
+            GamepadButton::LeftTrigger2 => config.left_trigger2,
+            GamepadButton::RightTrigger => config.right_trigger,
+            GamepadButton::RightTrigger2 => config.right_trigger2,
+            GamepadButton::Select => config.select,
+            GamepadButton::Start => config.start,
+            GamepadButton::LeftThumb => config.left_thumb,
+            GamepadButton::RightThumb => config.right_thumb,
+            GamepadButton::DPadUp => config.dpad_up,
+            GamepadButton::DPadDown => config.dpad_down,
+            GamepadButton::DPadLeft => config.dpad_left,
+            GamepadButton::DPadRight => config.dpad_right,
+        }
+    }
+
+    fn is_repeatable_gamepad_action(action: MangaAction) -> bool {
+        matches!(
+            action,
+            MangaAction::NextPage
+                | MangaAction::PrevPage
+                | MangaAction::OneNextPage
+                | MangaAction::OnePrevPage
+                | MangaAction::NextFile
+                | MangaAction::PrevFile
+                | MangaAction::NextFolder
+                | MangaAction::PrevFolder
+        )
+    }
+
+    fn gamepad_repeat_interval(&self) -> Duration {
+        Duration::from_millis(self.config.image_delay.max(80))
+    }
+
+    fn collect_gamepad_action(&mut self, ctx: &egui::Context) -> Option<MangaAction> {
+        let gamepad_config = self.config.gamepad;
+        let repeat_interval = self.gamepad_repeat_interval();
+        let gilrs = self.gamepad.as_mut()?;
+        let mut action_to_run = None;
+        let now = Instant::now();
+
+        while let Some(event) = gilrs.next_event() {
+            match event.event {
+                EventType::ButtonPressed(button, _) => {
+                    if let Some(mapped_button) = Self::map_gamepad_button(button) {
+                        let action = Self::gamepad_action_for_button(gamepad_config, mapped_button);
+                        let index = Self::gamepad_button_index(mapped_button);
+                        if Self::is_repeatable_gamepad_action(action) {
+                            self.gamepad_repeat_deadlines[index] =
+                                Some(now + GAMEPAD_INITIAL_REPEAT_DELAY);
+                            ctx.request_repaint_after(GAMEPAD_INITIAL_REPEAT_DELAY);
+                        } else {
+                            self.gamepad_repeat_deadlines[index] = None;
+                        }
+                        if action != MangaAction::None {
+                            action_to_run = Some(action);
+                        }
+                    }
+                }
+                EventType::ButtonReleased(button, _) => {
+                    if let Some(mapped_button) = Self::map_gamepad_button(button) {
+                        let index = Self::gamepad_button_index(mapped_button);
+                        self.gamepad_repeat_deadlines[index] = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let now = Instant::now();
+        for button in GamepadButton::ALL {
+            let index = Self::gamepad_button_index(button);
+            if let Some(deadline) = self.gamepad_repeat_deadlines[index] {
+                if now >= deadline {
+                    let action = Self::gamepad_action_for_button(gamepad_config, button);
+                    if Self::is_repeatable_gamepad_action(action) {
+                        self.gamepad_repeat_deadlines[index] = Some(now + repeat_interval);
+                        ctx.request_repaint_after(repeat_interval);
+                        if action != MangaAction::None {
+                            action_to_run = Some(action);
+                        }
+                    } else {
+                        self.gamepad_repeat_deadlines[index] = None;
+                    }
+                } else {
+                    ctx.request_repaint_after(deadline - now);
+                }
+            }
+        }
+
+        action_to_run
+    }
+
     fn double_click_threshold(&self) -> Duration {
         Duration::from_millis(self.config.double_click_threshold_ms)
     }
@@ -964,7 +1228,9 @@ impl MangaReader {
                 let index = Self::mouse_button_index(button);
                 if !ctx.input(|i| i.pointer.button_down(Self::mouse_button_to_pointer(button))) {
                     self.mouse_press_started[index] = None;
+                    self.mouse_press_origin[index] = None;
                     self.mouse_long_triggered[index] = false;
+                    self.mouse_drag_suppressed[index] = false;
                 }
             }
             return None;
@@ -979,9 +1245,25 @@ impl MangaReader {
             if is_down {
                 if self.mouse_press_started[button_index].is_none() {
                     self.mouse_press_started[button_index] = Some(now);
+                    self.mouse_press_origin[button_index] =
+                        ctx.input(|i| i.pointer.interact_pos());
                     self.mouse_long_triggered[button_index] = false;
+                    self.mouse_drag_suppressed[button_index] = false;
                     ctx.request_repaint();
-                } else if !self.mouse_long_triggered[button_index]
+                } else if !self.mouse_drag_suppressed[button_index] {
+                    if let (Some(origin), Some(current)) = (
+                        self.mouse_press_origin[button_index],
+                        ctx.input(|i| i.pointer.interact_pos()),
+                    ) {
+                        if origin.distance(current) > MOUSE_DRAG_THRESHOLD {
+                            self.mouse_drag_suppressed[button_index] = true;
+                            self.pending_mouse_click[button_index] = None;
+                        }
+                    }
+                }
+
+                if !self.mouse_drag_suppressed[button_index]
+                    && !self.mouse_long_triggered[button_index]
                     && self.mouse_press_started[button_index]
                         .map(|started| now.duration_since(started) >= LONG_CLICK_DURATION)
                         .unwrap_or(false)
@@ -992,15 +1274,20 @@ impl MangaReader {
                     if action != MangaAction::None {
                         return Some(action);
                     }
-                } else if !self.mouse_long_triggered[button_index] {
+                } else if !self.mouse_long_triggered[button_index]
+                    && !self.mouse_drag_suppressed[button_index]
+                {
                     ctx.request_repaint();
                 }
             }
 
             let was_long_click = self.mouse_long_triggered[button_index];
-            if response.clicked_by(pointer_button) && !was_long_click {
+            let was_dragging = self.mouse_drag_suppressed[button_index];
+            if response.clicked_by(pointer_button) && !was_long_click && !was_dragging {
                 self.mouse_press_started[button_index] = None;
+                self.mouse_press_origin[button_index] = None;
                 self.mouse_long_triggered[button_index] = false;
+                self.mouse_drag_suppressed[button_index] = false;
                 let now = Instant::now();
                 let double_action = self.get_mouse_action(MouseGesture::DoubleClick(button));
                 let click_action = self.get_mouse_action(MouseGesture::Click(button));
@@ -1028,7 +1315,9 @@ impl MangaReader {
 
             if !is_down {
                 self.mouse_press_started[button_index] = None;
+                self.mouse_press_origin[button_index] = None;
                 self.mouse_long_triggered[button_index] = false;
+                self.mouse_drag_suppressed[button_index] = false;
             }
         }
 
@@ -1059,8 +1348,10 @@ impl MangaReader {
 
     fn execute_action(&mut self, action: MangaAction, ctx: &egui::Context) {
         match action {
-            MangaAction::NextPage => self.next_page(ctx),
-            MangaAction::PrevPage => self.prev_page(ctx),
+            MangaAction::NextPage => self.next_page(ctx, false),
+            MangaAction::PrevPage => self.prev_page(ctx, false),
+            MangaAction::OneNextPage => self.next_page(ctx, true),
+            MangaAction::OnePrevPage => self.prev_page(ctx, true),
             MangaAction::FirstPage => self.go_to_first_page(ctx),
             MangaAction::LastPage => self.go_to_last_page(ctx),
             MangaAction::NextFile => self.next_zip(ctx),
@@ -1085,27 +1376,49 @@ impl MangaReader {
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
+        visible_rect: Rect,
         hit_id: &str,
         tex_index: usize,
         align: egui::Align,
+        image_size: egui::Vec2,
     ) -> egui::Response {
         ui.allocate_ui_at_rect(rect, |ui| {
-            let resp = ui.interact(rect, ui.id().with(hit_id), egui::Sense::click());
+            let resp = ui.interact(visible_rect, ui.id().with(hit_id), egui::Sense::click());
 
             // Render the image on top
             if let Some(tex) = &self.textures[tex_index] {
+                let previous_clip_rect = ui.clip_rect();
+                ui.set_clip_rect(previous_clip_rect.intersect(visible_rect));
                 let layout = egui::Layout::top_down(align);
                 ui.with_layout(layout, |ui| {
                     ui.add(
                         egui::Image::new(tex)
-                            .fit_to_exact_size(rect.size())
+                            .fit_to_exact_size(image_size)
                             .maintain_aspect_ratio(true),
                     );
                 });
+                ui.set_clip_rect(previous_clip_rect);
             }
             resp
         })
         .inner
+    }
+
+    fn paint_image_clipped(
+        &self,
+        ui: &egui::Ui,
+        tex: &egui::TextureHandle,
+        image_rect: Rect,
+        visible_rect: Rect,
+    ) {
+        ui.painter()
+            .with_clip_rect(ui.clip_rect().intersect(visible_rect))
+            .image(
+                tex.id(),
+                image_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
     }
 
     fn is_single_page(&self) -> bool {
@@ -1132,6 +1445,7 @@ impl MangaReader {
 
         self.reset_buffer();
         self.texture_cache.clear();
+        self.reset_pan();
         self.textures = self.load_pair(self.current_index, ctx);
         let msg = if self.is_shifted {
             tr("mode.odd_page")
@@ -1176,6 +1490,8 @@ impl eframe::App for MangaReader {
                                 match action_name.as_str() {
                                     "Next Page" => self.config.keys.next_page = new_shortcut,
                                     "Previous Page" => self.config.keys.prev_page = new_shortcut,
+                                    "1 Next Page" => self.config.keys.one_next_page = new_shortcut,
+                                    "1 Prev Page" => self.config.keys.one_prev_page = new_shortcut,
                                     "First Page" => self.config.keys.first_page = new_shortcut,
                                     "Last Page" => self.config.keys.last_page = new_shortcut,
                                     "Next File" => self.config.keys.next_file = new_shortcut,
@@ -1219,6 +1535,12 @@ impl eframe::App for MangaReader {
                 if is_triggered(&keys.prev_page) {
                     action_to_run = MangaAction::PrevPage;
                 }
+                if is_triggered(&keys.one_next_page) {
+                    action_to_run = MangaAction::OneNextPage;
+                }
+                if is_triggered(&keys.one_prev_page) {
+                    action_to_run = MangaAction::OnePrevPage;
+                }
                 if is_triggered(&keys.first_page) {
                     action_to_run = MangaAction::FirstPage;
                 }
@@ -1250,6 +1572,12 @@ impl eframe::App for MangaReader {
                     action_to_run = MangaAction::QuitApp;
                 }
             });
+        }
+
+        if self.binding_action.is_none() && action_to_run == MangaAction::None {
+            if let Some(gamepad_action) = self.collect_gamepad_action(ctx) {
+                action_to_run = gamepad_action;
+            }
         }
 
         // Load file if passed as program parameter
@@ -1364,9 +1692,23 @@ impl eframe::App for MangaReader {
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new(tr("settings.page_view.single"))).clicked();
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new(tr("settings.page_view.double_rl"))).clicked();
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new(tr("settings.page_view.double_lr"))).clicked();
+                                    separator_pct(ui);
+                                    ui.label(egui::RichText::new(tr("settings.page_view.center_offset")).size(20.0).strong());
+                                    let slider_width = ui.available_width() * 0.98;
+                                    let previous_slider_width = ui.spacing().slider_width;
+                                    ui.spacing_mut().slider_width = slider_width - 80.0;
+                                    changed |= ui
+                                        .add(egui::Slider::new(
+                                            &mut self.config.spread_center_offset,
+                                            -150.0..=150.0,
+                                        ).step_by(1.0))
+                                        .on_hover_text(tr("settings.page_view.center_offset.tooltip"))
+                                        .changed();
+                                    ui.spacing_mut().slider_width = previous_slider_width - 80.0;
 
                                     if changed {
                                         self.reset_buffer();
+                                        self.reset_pan();
                                         self.textures = self.load_pair(self.current_index, ctx);
                                         self.save_settings();
                                     }
@@ -1393,26 +1735,80 @@ impl eframe::App for MangaReader {
                                 ui.label(egui::RichText::new(tr("settings.zoom")).size(20.0).strong());
                                 separator_pct(ui);
 
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width = self.config.settings_width * 0.9 - 120.0;
                                 let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text(tr("settings.zoom.slider")));
+                                ui.spacing_mut().slider_width = previous_slider_width;
                                 let is_scrubbing_zoom = zoom_slider.dragged();
                                 if zoom_slider.changed() && !is_scrubbing_zoom {
-                                    // If we zoom, and we aren't in single page mode, force it (as per your requirement)
                                     if self.zoom_factor != 1.0 {
                                         self.reset_buffer();
                                         self.texture_cache.clear();
+                                        self.reset_pan();
                                         self.textures = self.load_pair(self.current_index, ctx);
-                                        self.config.page_view_options = PageViewOptions::Single;
                                     }
                                 }
 
                                 if ui.button(egui::RichText::new(tr("settings.zoom.reset"))).clicked() {
                                     self.zoom_factor = 1.0;
+                                    self.reset_pan();
+                                }
+
+                                ui.add_space(10.0);
+                                ui.label(egui::RichText::new(tr("settings.image_sizing")).size(18.0).strong());
+                                let mut image_sizing_changed = false;
+                                image_sizing_changed |= ui
+                                    .radio_value(
+                                        &mut self.config.image_sizing_mode,
+                                        ImageSizingMode::FitHeight,
+                                        egui::RichText::new(tr("settings.image_sizing.fit_height")),
+                                    )
+                                    .clicked();
+                                image_sizing_changed |= ui
+                                    .radio_value(
+                                        &mut self.config.image_sizing_mode,
+                                        ImageSizingMode::FitWidth,
+                                        egui::RichText::new(tr("settings.image_sizing.fit_width")),
+                                    )
+                                    .clicked();
+                                image_sizing_changed |= ui
+                                    .radio_value(
+                                        &mut self.config.image_sizing_mode,
+                                        ImageSizingMode::OriginalSize,
+                                        egui::RichText::new(tr("settings.image_sizing.original")),
+                                    )
+                                    .clicked();
+                                if image_sizing_changed {
+                                    self.reset_buffer();
+                                    self.texture_cache.clear();
+                                    self.reset_pan();
+                                    self.textures = self.load_pair(self.current_index, ctx);
+                                    self.save_settings();
                                 }
                                 separator_pct(ui);
 
                                 ui.add_space(20.0);
                                 ui.label(egui::RichText::new(tr("settings.others")).size(20.0).strong());
                                 separator_pct(ui);
+                                ui.horizontal(|ui| {
+                                    ui.label(tr("settings.image_panel_background"));
+                                    let mut background_color = self.image_panel_background_color();
+                                    if egui::color_picker::color_edit_button_srgba(
+                                        ui,
+                                        &mut background_color,
+                                        egui::color_picker::Alpha::Opaque,
+                                    )
+                                    .changed()
+                                    {
+                                        self.config.image_panel_background = [
+                                            background_color.r(),
+                                            background_color.g(),
+                                            background_color.b(),
+                                            background_color.a(),
+                                        ];
+                                        self.save_settings();
+                                    }
+                                });
                                 ui.checkbox(&mut self.config.show_top_bar, tr("settings.show_toolbar"));
                                 ui.checkbox(&mut self.config.transparency_support, tr("settings.transparency"))
                                     .on_hover_text(tr("settings.transparency.tooltip"));
@@ -1435,6 +1831,12 @@ impl eframe::App for MangaReader {
                                             ui.end_row();
                                             ui.label(tr("settings.key.prev_page"));
                                             render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action, &listening_text);
+                                            ui.end_row();
+                                            ui.label(tr("settings.key.one_next_page"));
+                                            render_binding_button(ui, "1 Next Page", &mut self.config.keys.one_next_page, &mut self.binding_action, &listening_text);
+                                            ui.end_row();
+                                            ui.label(tr("settings.key.one_prev_page"));
+                                            render_binding_button(ui, "1 Prev Page", &mut self.config.keys.one_prev_page, &mut self.binding_action, &listening_text);
                                             ui.end_row();
                                             ui.label(tr("settings.key.first_page"));
                                             render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action, &listening_text);
@@ -1552,6 +1954,56 @@ impl eframe::App for MangaReader {
                                         separator_pct(ui);
                                     });
 
+                                ui.add_space(20.0);
+                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.gamepad_mapping")).size(20.0).strong())
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        separator_pct(ui);
+                                        ui.label(tr("settings.gamepad_mapping.description"));
+                                        ui.add_space(10.0);
+                                        let mut gamepad_changed = false;
+                                        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
+                                            .into_iter()
+                                            .map(|action| (action, self.action_label(action).to_owned()))
+                                            .collect();
+                                        let unassigned_label = tr("common.unassigned").to_owned();
+                                        egui::Grid::new("gamepad_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
+                                            for button in GamepadButton::ALL {
+                                                ui.label(self.gamepad_button_label(button));
+                                                let action = match button {
+                                                    GamepadButton::South => &mut self.config.gamepad.south,
+                                                    GamepadButton::East => &mut self.config.gamepad.east,
+                                                    GamepadButton::North => &mut self.config.gamepad.north,
+                                                    GamepadButton::West => &mut self.config.gamepad.west,
+                                                    GamepadButton::LeftTrigger => &mut self.config.gamepad.left_trigger,
+                                                    GamepadButton::LeftTrigger2 => &mut self.config.gamepad.left_trigger2,
+                                                    GamepadButton::RightTrigger => &mut self.config.gamepad.right_trigger,
+                                                    GamepadButton::RightTrigger2 => &mut self.config.gamepad.right_trigger2,
+                                                    GamepadButton::Select => &mut self.config.gamepad.select,
+                                                    GamepadButton::Start => &mut self.config.gamepad.start,
+                                                    GamepadButton::LeftThumb => &mut self.config.gamepad.left_thumb,
+                                                    GamepadButton::RightThumb => &mut self.config.gamepad.right_thumb,
+                                                    GamepadButton::DPadUp => &mut self.config.gamepad.dpad_up,
+                                                    GamepadButton::DPadDown => &mut self.config.gamepad.dpad_down,
+                                                    GamepadButton::DPadLeft => &mut self.config.gamepad.dpad_left,
+                                                    GamepadButton::DPadRight => &mut self.config.gamepad.dpad_right,
+                                                };
+                                                gamepad_changed |= render_mouse_action_dropdown(
+                                                    ui,
+                                                    &format!("gamepad_{button:?}"),
+                                                    action,
+                                                    &action_options,
+                                                    &unassigned_label,
+                                                );
+                                                ui.end_row();
+                                            }
+                                        });
+                                        if gamepad_changed {
+                                            self.save_settings();
+                                        }
+                                        separator_pct(ui);
+                                    });
+
                                 ui.add_space(50.0);
                         });
 
@@ -1650,29 +2102,53 @@ impl eframe::App for MangaReader {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         // --- Folder Navigation ---
-                        if ui.button("📁⏮").on_hover_text(tr("toolbar.prev_folder")).clicked() {
+                        if ui
+                            .button("📁⏮")
+                            .on_hover_text(tr("toolbar.prev_folder"))
+                            .clicked()
+                        {
                             self.prev_folder(ctx);
                         }
-                        if ui.button("📁⏭").on_hover_text(tr("toolbar.next_folder")).clicked() {
+                        if ui
+                            .button("📁⏭")
+                            .on_hover_text(tr("toolbar.next_folder"))
+                            .clicked()
+                        {
                             self.next_folder(ctx);
                         }
                         ui.separator();
 
                         // --- File Navigation ---
-                        if ui.button("📦⏮").on_hover_text(tr("toolbar.prev_file")).clicked() {
+                        if ui
+                            .button("📦⏮")
+                            .on_hover_text(tr("toolbar.prev_file"))
+                            .clicked()
+                        {
                             self.prev_zip(ctx);
                         }
-                        if ui.button("📦⏭").on_hover_text(tr("toolbar.next_file")).clicked() {
+                        if ui
+                            .button("📦⏭")
+                            .on_hover_text(tr("toolbar.next_file"))
+                            .clicked()
+                        {
                             self.next_zip(ctx);
                         }
                         ui.separator();
 
                         // --- Page Navigation ---
-                        if ui.button("⏮").on_hover_text(tr("toolbar.first_page")).clicked() {
+                        if ui
+                            .button("⏮")
+                            .on_hover_text(tr("toolbar.first_page"))
+                            .clicked()
+                        {
                             self.go_to_first_page(ctx);
                         }
-                        if ui.button("◀").on_hover_text(tr("toolbar.prev_page")).clicked() {
-                            self.prev_page(ctx);
+                        if ui
+                            .button("◀")
+                            .on_hover_text(tr("toolbar.prev_page"))
+                            .clicked()
+                        {
+                            self.prev_page(ctx, false);
                         }
 
                         // Page Indicator in middle
@@ -1682,11 +2158,36 @@ impl eframe::App for MangaReader {
                             self.image_files.len()
                         ));
 
-                        if ui.button("▶").on_hover_text(tr("toolbar.next_page")).clicked() {
-                            self.next_page(ctx);
+                        if ui
+                            .button("▶")
+                            .on_hover_text(tr("toolbar.next_page"))
+                            .clicked()
+                        {
+                            self.next_page(ctx, false);
                         }
-                        if ui.button("⏭").on_hover_text(tr("toolbar.last_page")).clicked() {
+                        if ui
+                            .button("⏭")
+                            .on_hover_text(tr("toolbar.last_page"))
+                            .clicked()
+                        {
                             self.go_to_last_page(ctx);
+                        }
+                        ui.separator();
+
+                        if ui
+                            .button("1◀")
+                            .on_hover_text(tr("toolbar.prev_page"))
+                            .clicked()
+                        {
+                            self.prev_page(ctx, true);
+                        }
+
+                        if ui
+                            .button("▶1")
+                            .on_hover_text(tr("toolbar.next_page"))
+                            .clicked()
+                        {
+                            self.next_page(ctx, true);
                         }
                         ui.separator();
 
@@ -1700,7 +2201,11 @@ impl eframe::App for MangaReader {
                             self.change_shifted_mode(ctx);
                         }
 
-                        if ui.button("📺").on_hover_text(tr("toolbar.fullscreen")).clicked() {
+                        if ui
+                            .button("📺")
+                            .on_hover_text(tr("toolbar.fullscreen"))
+                            .clicked()
+                        {
                             self.is_fullscreen = !self.is_fullscreen;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
                                 self.is_fullscreen,
@@ -1732,13 +2237,13 @@ impl eframe::App for MangaReader {
                         if slider.changed() {
                             self.current_index = page_val - 1;
                             self.reset_buffer();
+                            self.reset_pan();
                             self.textures = self.load_pair(self.current_index, ctx);
                         }
 
                         // --- Hide Button ---
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked()
-                            {
+                            if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked() {
                                 self.config.show_top_bar = false;
                             }
                         });
@@ -1747,63 +2252,177 @@ impl eframe::App for MangaReader {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(40)))
+            .frame(egui::Frame::NONE.fill(self.image_panel_background_color()))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
 
                 // Create a 'Response' for the entire background area first,
                 // but we check it at the END of the code.
-                let bg_response = ui.interact(rect, ui.id().with("bg"), egui::Sense::click());
+                let bg_response = ui.interact(rect, ui.id().with("bg"), egui::Sense::hover());
 
                 if self.zip_path.is_some() {
-                    // Show single image on center or if in shifted mode or is zoomed
+                    // Show single image on center or if in shifted cover mode
                     let is_zoomed = (self.zoom_factor - 1.0).abs() > 0.01;
+                    let double_needs_drag = self.double_page_needs_drag(rect);
                     let viewing_single = self.is_single_page()
-                        || (self.is_shifted && self.current_index == 0)
-                        || is_zoomed;
+                        || (self.is_shifted && self.current_index == 0);
+                    let single_image_size = self.textures[0]
+                        .as_ref()
+                        .map(|tex| self.image_draw_size(tex, rect.size(), self.zoom_factor))
+                        .unwrap_or(egui::Vec2::ZERO);
+                    let single_needs_drag = single_image_size.x > rect.width()
+                        || single_image_size.y > rect.height();
 
-                    if viewing_single {
-                        // Wrap in ScrollArea for panning/dragging
-                        egui::ScrollArea::both()
-                            .auto_shrink([false; 2])
-                            .drag_to_scroll(true) // This enables the "drag the image" feature
-                            .show(ui, |ui| {
-                                if let Some(tex) = &self.textures[0] {
-                                    let tex_size = tex.size_vec2();
-                                    let aspect_ratio = tex_size.x / tex_size.y;
-
-                                    // Calculate size based on zoom
-                                    // 1.0 zoom = screen height. 2.0 zoom = double screen height.
-                                    let zoom_height = rect.height() * self.zoom_factor;
-                                    let zoom_width = zoom_height * aspect_ratio;
-                                    let zoom_size = egui::vec2(zoom_width, zoom_height);
-
-                                    let layout =
-                                        egui::Layout::centered_and_justified(Direction::TopDown);
-                                    ui.with_layout(layout, |ui| {
-                                        ui.add(
-                                            egui::Image::new(tex)
-                                                .fit_to_exact_size(zoom_size)
-                                                .maintain_aspect_ratio(true),
-                                        );
-                                    });
-                                }
-                            });
-                        let cover_response =
-                            ui.interact(rect, ui.id().with("cover_hit"), egui::Sense::click());
+                    if viewing_single && !single_needs_drag {
+                        if let Some(tex) = &self.textures[0] {
+                            ui.painter().image(
+                                tex.id(),
+                                egui::Rect::from_center_size(rect.center(), single_image_size),
+                                egui::Rect::from_min_max(
+                                    egui::Pos2::ZERO,
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    } else if viewing_single {
+                        let pan_response =
+                            ui.interact(rect, ui.id().with("single_pan"), egui::Sense::click_and_drag());
+                        if pan_response.dragged() {
+                            self.pan_offset += ctx.input(|i| i.pointer.delta());
+                            ctx.request_repaint();
+                        }
                         if self.binding_action.is_none() && action_to_run == MangaAction::None {
-                            if let Some(mouse_action) =
-                                self.collect_mouse_action(&cover_response, ctx)
+                            if let Some(mouse_action) = self.collect_mouse_action(&pan_response, ctx)
                             {
                                 action_to_run = mouse_action;
                             }
                         }
+                        if let Some(tex) = &self.textures[0] {
+                            ui.painter().image(
+                                tex.id(),
+                                egui::Rect::from_center_size(
+                                    rect.center() + self.pan_offset,
+                                    single_image_size,
+                                ),
+                                egui::Rect::from_min_max(
+                                    egui::Pos2::ZERO,
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    } else if is_zoomed || double_needs_drag {
+                        let pan_response =
+                            ui.interact(rect, ui.id().with("spread_pan"), egui::Sense::click_and_drag());
+                        if pan_response.dragged() {
+                            self.pan_offset += ctx.input(|i| i.pointer.delta());
+                            ctx.request_repaint();
+                        }
+                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
+                            if let Some(mouse_action) = self.collect_mouse_action(&pan_response, ctx)
+                            {
+                                action_to_run = mouse_action;
+                            }
+                        }
+                        let page_container_size = egui::vec2(
+                            (rect.width() * 0.5 - self.config.spread_center_offset.abs())
+                                .max(1.0),
+                            rect.height(),
+                        );
+                        let left_size = self.textures[1]
+                            .as_ref()
+                            .map(|tex| {
+                                self.image_draw_size(tex, page_container_size, self.zoom_factor)
+                            })
+                            .unwrap_or(egui::Vec2::ZERO);
+                        let right_size = self.textures[0]
+                            .as_ref()
+                            .map(|tex| {
+                                self.image_draw_size(tex, page_container_size, self.zoom_factor)
+                            })
+                            .unwrap_or(egui::Vec2::ZERO);
+
+                        let center_axis = rect.center().x + self.pan_offset.x;
+                        let offset = self.config.spread_center_offset;
+                        let top_y =
+                            rect.center().y - left_size.y.max(right_size.y) * 0.5 + self.pan_offset.y;
+                        let (visual_left_size, visual_right_size) =
+                            if self.config.page_view_options == PageViewOptions::DoubleLR {
+                                (right_size, left_size)
+                            } else {
+                                (left_size, right_size)
+                            };
+                        let visual_left_x = center_axis - offset - visual_left_size.x;
+                        let visual_right_x = center_axis + offset;
+                        let clip_axis = center_axis.clamp(rect.min.x, rect.max.x);
+                        let left_visible_rect = egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(clip_axis, rect.max.y),
+                        );
+                        let right_visible_rect = egui::Rect::from_min_max(
+                            egui::pos2(clip_axis, rect.min.y),
+                            rect.max,
+                        );
+
+                        if self.config.page_view_options == PageViewOptions::DoubleLR {
+                            if let Some(tex) = &self.textures[0] {
+                                self.paint_image_clipped(
+                                    ui,
+                                    tex,
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(visual_left_x, top_y),
+                                        right_size,
+                                    ),
+                                    left_visible_rect,
+                                );
+                            }
+                            if let Some(tex) = &self.textures[1] {
+                                self.paint_image_clipped(
+                                    ui,
+                                    tex,
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(visual_right_x, top_y),
+                                        left_size,
+                                    ),
+                                    right_visible_rect,
+                                );
+                            }
+                        } else {
+                            if let Some(tex) = &self.textures[1] {
+                                self.paint_image_clipped(
+                                    ui,
+                                    tex,
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(visual_left_x, top_y),
+                                        left_size,
+                                    ),
+                                    left_visible_rect,
+                                );
+                            }
+                            if let Some(tex) = &self.textures[0] {
+                                self.paint_image_clipped(
+                                    ui,
+                                    tex,
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(visual_right_x, top_y),
+                                        right_size,
+                                    ),
+                                    right_visible_rect,
+                                );
+                            }
+                        }
+
                     } else {
                         let center = rect.center().x;
-                        let mut left_half =
-                            egui::Rect::from_min_max(rect.min, egui::pos2(center, rect.max.y));
-                        let mut right_half =
-                            egui::Rect::from_min_max(egui::pos2(center, rect.min.y), rect.max);
+                        let mut left_half = egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(center - self.config.spread_center_offset, rect.max.y),
+                        );
+                        let mut right_half = egui::Rect::from_min_max(
+                            egui::pos2(center + self.config.spread_center_offset, rect.min.y),
+                            rect.max,
+                        );
                         let mut align_for_left_side: Align = egui::Align::RIGHT;
                         let mut align_for_right_side: Align = egui::Align::LEFT;
                         if self.config.page_view_options == PageViewOptions::DoubleLR {
@@ -1812,19 +2431,46 @@ impl eframe::App for MangaReader {
                             align_for_right_side = egui::Align::RIGHT;
                         }
 
+                        let left_visible_half =
+                            egui::Rect::from_min_max(rect.min, egui::pos2(center, rect.max.y));
+                        let right_visible_half =
+                            egui::Rect::from_min_max(egui::pos2(center, rect.min.y), rect.max);
+                        let left_visible_rect = if left_half.center().x <= center {
+                            left_visible_half
+                        } else {
+                            right_visible_half
+                        };
+                        let right_visible_rect = if right_half.center().x <= center {
+                            left_visible_half
+                        } else {
+                            right_visible_half
+                        };
+                        let left_image_size = self.textures[1]
+                            .as_ref()
+                            .map(|tex| self.image_draw_size(tex, left_half.size(), 1.0))
+                            .unwrap_or(egui::Vec2::ZERO);
+                        let right_image_size = self.textures[0]
+                            .as_ref()
+                            .map(|tex| self.image_draw_size(tex, right_half.size(), 1.0))
+                            .unwrap_or(egui::Vec2::ZERO);
+
                         let left_response = self.create_image_rect(
                             ui,
                             left_half,
+                            left_visible_rect,
                             "left_hit",
                             1,
                             align_for_left_side,
+                            left_image_size,
                         );
                         let right_response = self.create_image_rect(
                             ui,
                             right_half,
+                            right_visible_rect,
                             "right_hit",
                             0,
                             align_for_right_side,
+                            right_image_size,
                         );
                         if self.binding_action.is_none() && action_to_run == MangaAction::None {
                             if let Some(mouse_action) =
@@ -1846,8 +2492,9 @@ impl eframe::App for MangaReader {
                             && !ctx.input(|i| i.pointer.any_down())
                         {
                             // Extra safety: check if we are actually hovering an image
-                            if !left_half.contains(ctx.pointer_interact_pos().unwrap_or_default())
-                                && !right_half
+                            if !left_visible_rect
+                                .contains(ctx.pointer_interact_pos().unwrap_or_default())
+                                && !right_visible_rect
                                     .contains(ctx.pointer_interact_pos().unwrap_or_default())
                             {
                                 self.open_file_dialog();

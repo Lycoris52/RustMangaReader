@@ -55,6 +55,19 @@ impl ResizeMethod {
     }
 }
 
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
+pub enum ImageSizingMode {
+    FitHeight,
+    FitWidth,
+    OriginalSize,
+}
+
+impl Default for ImageSizingMode {
+    fn default() -> Self {
+        Self::FitHeight
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Shortcut {
     pub key: egui::Key,
@@ -97,6 +110,8 @@ pub enum MangaAction {
     None,
     NextPage,
     PrevPage,
+    OneNextPage,
+    OnePrevPage,
     FirstPage,
     LastPage,
     NextFile,
@@ -110,10 +125,12 @@ pub enum MangaAction {
 }
 
 impl MangaAction {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::None,
         Self::NextPage,
         Self::PrevPage,
+        Self::OneNextPage,
+        Self::OnePrevPage,
         Self::FirstPage,
         Self::LastPage,
         Self::NextFile,
@@ -125,24 +142,6 @@ impl MangaAction {
         Self::OpenFile,
         Self::QuitApp,
     ];
-
-    pub fn format(self) -> &'static str {
-        match self {
-            Self::None => "Unassigned",
-            Self::NextPage => "Next Page",
-            Self::PrevPage => "Previous Page",
-            Self::FirstPage => "First Page",
-            Self::LastPage => "Last Page",
-            Self::NextFile => "Next File",
-            Self::PrevFile => "Previous File",
-            Self::NextFolder => "Next Folder",
-            Self::PrevFolder => "Previous Folder",
-            Self::FullScreen => "Toggle Fullscreen",
-            Self::ViewMode => "Odd/Even Page Start",
-            Self::OpenFile => "Open File",
-            Self::QuitApp => "Quit App",
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -162,16 +161,6 @@ impl MouseButton {
         Self::Button4,
         Self::Button5,
     ];
-
-    pub fn format(self) -> &'static str {
-        match self {
-            Self::Button1 => "Mouse 1",
-            Self::Button2 => "Mouse 2",
-            Self::Button3 => "Mouse 3",
-            Self::Button4 => "Mouse 4",
-            Self::Button5 => "Mouse 5",
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -184,23 +173,53 @@ pub enum MouseGesture {
     ScrollDown,
 }
 
-impl MouseGesture {
-    pub fn format(self) -> String {
-        match self {
-            Self::Unassigned => "Unassigned".to_string(),
-            Self::Click(button) => format!("{} Click", button.format()),
-            Self::DoubleClick(button) => format!("{} Double Click", button.format()),
-            Self::LongClick(button) => format!("{} Long Click", button.format()),
-            Self::ScrollUp => "Scroll Up".to_string(),
-            Self::ScrollDown => "Scroll Down".to_string(),
-        }
-    }
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+pub enum GamepadButton {
+    South,
+    East,
+    North,
+    West,
+    LeftTrigger,
+    LeftTrigger2,
+    RightTrigger,
+    RightTrigger2,
+    Select,
+    Start,
+    LeftThumb,
+    RightThumb,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+}
+
+impl GamepadButton {
+    pub const ALL: [Self; 16] = [
+        Self::South,
+        Self::East,
+        Self::North,
+        Self::West,
+        Self::LeftTrigger,
+        Self::LeftTrigger2,
+        Self::RightTrigger,
+        Self::RightTrigger2,
+        Self::Select,
+        Self::Start,
+        Self::LeftThumb,
+        Self::RightThumb,
+        Self::DPadUp,
+        Self::DPadDown,
+        Self::DPadLeft,
+        Self::DPadRight,
+    ];
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct KeyConfig {
     pub next_page: Shortcut,
     pub prev_page: Shortcut,
+    pub one_next_page: Shortcut,
+    pub one_prev_page: Shortcut,
     pub first_page: Shortcut,
     pub last_page: Shortcut,
     pub next_file: Shortcut,
@@ -218,6 +237,8 @@ impl Default for KeyConfig {
         Self {
             next_page: Shortcut::new(egui::Key::ArrowLeft, false, false, false),
             prev_page: Shortcut::new(egui::Key::ArrowRight, false, false, false),
+            one_next_page: Shortcut::new(egui::Key::ArrowLeft, false, false, true),
+            one_prev_page: Shortcut::new(egui::Key::ArrowRight, false, false, true),
             first_page: Shortcut::new(egui::Key::Home, false, false, false),
             last_page: Shortcut::new(egui::Key::End, false, false, false),
             next_file: Shortcut::new(egui::Key::ArrowDown, false, false, false),
@@ -278,14 +299,68 @@ impl Default for MouseConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(default)]
+pub struct GamepadConfig {
+    pub south: MangaAction,
+    pub east: MangaAction,
+    pub north: MangaAction,
+    pub west: MangaAction,
+    pub left_trigger: MangaAction,
+    pub left_trigger2: MangaAction,
+    pub right_trigger: MangaAction,
+    pub right_trigger2: MangaAction,
+    pub select: MangaAction,
+    pub start: MangaAction,
+    pub left_thumb: MangaAction,
+    pub right_thumb: MangaAction,
+    pub dpad_up: MangaAction,
+    pub dpad_down: MangaAction,
+    pub dpad_left: MangaAction,
+    pub dpad_right: MangaAction,
+}
+
+impl Default for GamepadConfig {
+    fn default() -> Self {
+        Self {
+            south: MangaAction::ViewMode,
+            east: MangaAction::PrevPage,
+            north: MangaAction::None,
+            west: MangaAction::NextPage,
+            left_trigger: MangaAction::PrevFile,
+            left_trigger2: MangaAction::PrevFolder,
+            right_trigger: MangaAction::NextFile,
+            right_trigger2: MangaAction::NextFolder,
+            select: MangaAction::QuitApp,
+            start: MangaAction::OpenFile,
+            left_thumb: MangaAction::FirstPage,
+            right_thumb: MangaAction::LastPage,
+            dpad_up: MangaAction::PrevFile,
+            dpad_down: MangaAction::NextFile,
+            dpad_left: MangaAction::NextPage,
+            dpad_right: MangaAction::PrevPage,
+        }
+    }
+}
+
 fn default_double_click_threshold_ms() -> u64 {
-    250
+    160
+}
+
+fn default_image_panel_background() -> [u8; 4] {
+    [40, 40, 40, 255]
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
     pub page_view_options: PageViewOptions,
+    #[serde(default)]
+    pub image_sizing_mode: ImageSizingMode,
+    #[serde(default)]
+    pub spread_center_offset: f32,
+    #[serde(default = "default_image_panel_background")]
+    pub image_panel_background: [u8; 4],
     #[serde(default)]
     pub language: UiLanguage,
     pub settings_width: f32,
@@ -296,6 +371,8 @@ pub struct AppSettings {
     pub keys: KeyConfig,
     #[serde(default)]
     pub mouse: MouseConfig,
+    #[serde(default)]
+    pub gamepad: GamepadConfig,
     #[serde(default = "default_double_click_threshold_ms")]
     pub double_click_threshold_ms: u64,
     pub show_top_bar: bool,
@@ -308,6 +385,9 @@ impl Default for AppSettings {
         Self {
             resize_method: ResizeMethod::Triangle,
             page_view_options: PageViewOptions::DoubleRL,
+            image_sizing_mode: ImageSizingMode::FitHeight,
+            spread_center_offset: 0.0,
+            image_panel_background: default_image_panel_background(),
             language: UiLanguage::English,
             settings_width: 300.0,
             show_settings: false,
@@ -316,7 +396,8 @@ impl Default for AppSettings {
             image_delay: 0,
             keys: KeyConfig::default(),
             mouse: MouseConfig::default(),
-            double_click_threshold_ms: 250,
+            gamepad: GamepadConfig::default(),
+            double_click_threshold_ms: 160,
             show_top_bar: true,
             enable_auto_image_byte_fix: true,
             last_page_action: LastPageAction::GotoNextFile,

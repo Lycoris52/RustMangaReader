@@ -1,5 +1,7 @@
 [日本語の説明はこちら](#japanese-explanation)
 
+<img src="./src/assets/rustmangareader_small.png" alt="An example image"  height="300">
+
 # <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">  RustMangaReader <img src="./src/assets/icon128.ico" alt="An example image" width="32" height="32">
 
 RustMangaReader is a high-performance, lightweight **offline** manga and comic viewer built in Rust. \

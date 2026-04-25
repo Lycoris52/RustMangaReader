@@ -41,7 +41,7 @@
   "settings.zoom": "ズーム:",
   "settings.zoom.slider": "ズーム倍率",
   "settings.zoom.reset": "ズームをリセット",
-  "settings.image_sizing": "画像サイズ:",
+  "settings.image_sizing": "画像縮小・拡大モード:",
   "settings.image_sizing.fit_height": "高さに合わせる",
   "settings.image_sizing.fit_width": "幅に合わせる",
   "settings.image_sizing.original": "元のサイズ",

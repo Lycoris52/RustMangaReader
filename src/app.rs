@@ -6,7 +6,7 @@ use crate::font;
 use crate::localize::{set_language, tr};
 use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
 use eframe::egui;
-use egui::{Align, Direction, PointerButton, Rect};
+use egui::{Align, PointerButton, Rect};
 use gilrs::{Button as GilrsButton, EventType, Gilrs};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
@@ -2347,7 +2347,7 @@ impl eframe::App for MangaReader {
                         let offset = self.config.spread_center_offset;
                         let top_y =
                             rect.center().y - left_size.y.max(right_size.y) * 0.5 + self.pan_offset.y;
-                        let (visual_left_size, visual_right_size) =
+                        let (visual_left_size, _) =
                             if self.config.page_view_options == PageViewOptions::DoubleLR {
                                 (right_size, left_size)
                             } else {

@@ -45,6 +45,8 @@ RustMangaReader supports almost every modern image format, including high-effici
 The app features a fully customizable keybinding system. By default, you can navigate using:
 
     Full Keyboard controls: All key controls such as next/prev page, next zip file, next folder is bindable.
+    Mouse support: Navigate pages and interact with the UI using the mouse.
+    Gamepad support: Read comfortably with controller input support for navigation and actions.
     Fullscreen: Toggle for an immersive experience.
     Quick Settings: An integrated side panel to swap scaling methods, view modes, or rebind keys on the fly.
 
@@ -113,6 +115,8 @@ MangaReaderは、圧縮アーカイブと生のファイル構造の両方をシ
 アプリには完全にカスタマイズ可能なキーバインドシステムが搭載されています。 デフォルトの操作は以下の通りです：
 
     フルキーボード操作: ページ送り、次のZIPファイル、次のフォルダ移動など、すべての操作を自由にキー割り当て（バインド）可能です。
+    マウス対応: マウスでページ移動やUI操作を行えます。
+    ゲームパッド対応: コントローラー入力でページ移動や各種操作に対応しています。
     全画面表示: 没入感のある読書体験を切り替えます。
     クイック設定: 統合されたサイドパネルから、スケーリング方法や閲覧モードの変更、キーのリバインドが即座に行えます。
 

@@ -2274,6 +2274,15 @@ impl eframe::App for MangaReader {
                         || single_image_size.y > rect.height();
 
                     if viewing_single && !single_needs_drag {
+                        let single_response =
+                            ui.interact(rect, ui.id().with("single_click"), egui::Sense::click());
+                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
+                            if let Some(mouse_action) =
+                                self.collect_mouse_action(&single_response, ctx)
+                            {
+                                action_to_run = mouse_action;
+                            }
+                        }
                         if let Some(tex) = &self.textures[0] {
                             ui.painter().image(
                                 tex.id(),

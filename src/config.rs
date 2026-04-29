@@ -30,7 +30,7 @@ pub enum UiLanguage {
 
 impl Default for UiLanguage {
     fn default() -> Self {
-        Self::English
+        Self::Japanese
     }
 }
 
@@ -388,7 +388,7 @@ impl Default for AppSettings {
             image_sizing_mode: ImageSizingMode::FitHeight,
             spread_center_offset: 0.0,
             image_panel_background: default_image_panel_background(),
-            language: UiLanguage::English,
+            language: UiLanguage::Japanese,
             settings_width: 300.0,
             show_settings: false,
             transparency_support: false,

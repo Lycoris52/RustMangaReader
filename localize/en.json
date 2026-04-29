@@ -70,6 +70,8 @@
   "settings.double_click_threshold": "Double Click Threshold (ms)",
   "settings.control.default_view": "Default View Controls",
   "settings.control.top_down_view": "Top Down View Controls",
+  "settings.control.mode_default": "Default",
+  "settings.control.mode_top_down": "Top Down",
   "settings.key.slide_image_down": "Slide Image Down:",
   "settings.key.slide_image_up": "Slide Image Up:",
   "settings.key.next_page": "Next Page:",

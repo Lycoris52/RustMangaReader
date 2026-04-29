@@ -70,6 +70,8 @@
   "settings.double_click_threshold": "ダブルクリック判定時間 (ms)",
   "settings.control.default_view": "通常表示の操作設定",
   "settings.control.top_down_view": "縦スクロール表示の操作設定",
+  "settings.control.mode_default": "通常",
+  "settings.control.mode_top_down": "縦スクロール",
   "settings.key.slide_image_down": "画像を下へスライド:",
   "settings.key.slide_image_up": "画像を上へスライド:",
   "settings.key.next_page": "次のページ:",

@@ -38,6 +38,21 @@ enum ControlProfile {
     TopDown,
 }
 
+fn control_profile_header_suffix(profile: ControlProfile) -> &'static str {
+    match profile {
+        ControlProfile::Default => tr("settings.control.mode_default"),
+        ControlProfile::TopDown => tr("settings.control.mode_top_down"),
+    }
+}
+
+fn control_mapping_header(base_label: &'static str, profile: ControlProfile) -> String {
+    format!(
+        "{} ({})",
+        tr(base_label),
+        control_profile_header_suffix(profile)
+    )
+}
+
 #[derive(Clone, PartialEq)]
 enum BindingTarget {
     Keyboard {
@@ -109,7 +124,7 @@ fn render_control_mapping_settings(
     let listening_text = tr("common.listening").to_owned();
 
     egui::CollapsingHeader::new(
-        egui::RichText::new(tr("settings.key_config"))
+        egui::RichText::new(control_mapping_header("settings.key_config", profile))
             .size(20.0)
             .strong(),
     )
@@ -215,7 +230,7 @@ fn render_control_mapping_settings(
 
     ui.add_space(20.0);
     egui::CollapsingHeader::new(
-        egui::RichText::new(tr("settings.mouse_mapping"))
+        egui::RichText::new(control_mapping_header("settings.mouse_mapping", profile))
             .size(20.0)
             .strong(),
     )
@@ -343,7 +358,7 @@ fn render_control_mapping_settings(
 
     ui.add_space(20.0);
     egui::CollapsingHeader::new(
-        egui::RichText::new(tr("settings.gamepad_mapping"))
+        egui::RichText::new(control_mapping_header("settings.gamepad_mapping", profile))
             .size(20.0)
             .strong(),
     )

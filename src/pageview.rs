@@ -5,6 +5,20 @@ use eframe::egui;
 use egui::Align;
 
 impl MangaReader {
+    fn top_down_anchor_bias(&self, index: usize, size: egui::Vec2, rect: egui::Rect) -> f32 {
+        if size == egui::Vec2::ZERO {
+            return 0.0;
+        }
+
+        if index == 0 {
+            (size.y - rect.height()) * 0.5
+        } else if index + 1 >= self.image_files.len() {
+            ((rect.height() - size.y) * 0.5).min(0.0)
+        } else {
+            0.0
+        }
+    }
+
     pub(super) fn render_page_view(
         &mut self,
         ctx: &egui::Context,
@@ -324,11 +338,208 @@ impl MangaReader {
     pub(super) fn render_top_down_page_view(
         &mut self,
         ctx: &egui::Context,
-        _action_to_run: &mut MangaAction,
+        action_to_run: &mut MangaAction,
     ) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(self.image_panel_background_color()))
             .show(ctx, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                let response = ui.interact(
+                    rect,
+                    ui.id().with("top_down_bg"),
+                    egui::Sense::click_and_drag(),
+                );
+                if self.binding_action.is_none() && *action_to_run == MangaAction::None {
+                    if let Some(mouse_action) = self.collect_mouse_action(&response, ctx) {
+                        *action_to_run = mouse_action;
+                    }
+                }
+                if response.dragged() {
+                    self.top_down_scroll_offset +=
+                        ctx.input(|i| i.pointer.delta()).y * self.config.top_down_image_drag_speed;
+                    self.clamp_top_down_scroll_offset();
+                    ctx.request_repaint();
+                }
+
+                if self.zip_path.is_some() {
+                    self.ensure_top_down_loaded_around(self.current_index, ctx);
+
+                    let page_gap = 0.0;
+                    let container_size = rect.size();
+                    let mut current_size = self
+                        .top_down_texture(self.current_index)
+                        .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                        .unwrap_or(egui::Vec2::ZERO);
+                    let mut prev_size = self
+                        .current_index
+                        .checked_sub(1)
+                        .and_then(|index| self.top_down_texture(index))
+                        .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                        .unwrap_or(egui::Vec2::ZERO);
+                    let mut next_size = self
+                        .top_down_texture(self.current_index + 1)
+                        .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                        .unwrap_or(egui::Vec2::ZERO);
+
+                    let mut current_bias =
+                        self.top_down_anchor_bias(self.current_index, current_size, rect);
+                    let mut current_position_offset = self.top_down_scroll_offset + current_bias;
+                    let mut current_center_y = rect.center().y + current_position_offset;
+                    let mut prev_distance = if prev_size != egui::Vec2::ZERO {
+                        current_size.y * 0.5 + page_gap + prev_size.y * 0.5
+                    } else {
+                        0.0
+                    };
+                    let mut next_distance = if next_size != egui::Vec2::ZERO {
+                        current_size.y * 0.5 + page_gap + next_size.y * 0.5
+                    } else {
+                        0.0
+                    };
+
+                    let mut changed_page = false;
+                    if prev_distance > 0.0 && current_position_offset > prev_distance * 0.5 {
+                        self.current_index -= 1;
+                        current_position_offset -= prev_distance;
+                        self.ensure_top_down_loaded_around(self.current_index, ctx);
+                        self.page_indicator_time = Some(std::time::Instant::now());
+                        changed_page = true;
+                        ctx.request_repaint();
+                    } else if next_distance > 0.0
+                        && current_position_offset < -(next_distance * 0.5)
+                    {
+                        self.current_index += 1;
+                        current_position_offset += next_distance;
+                        self.ensure_top_down_loaded_around(self.current_index, ctx);
+                        self.page_indicator_time = Some(std::time::Instant::now());
+                        changed_page = true;
+                        ctx.request_repaint();
+                    }
+
+                    if changed_page {
+                        current_size = self
+                            .top_down_texture(self.current_index)
+                            .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                            .unwrap_or(egui::Vec2::ZERO);
+                        prev_size = self
+                            .current_index
+                            .checked_sub(1)
+                            .and_then(|index| self.top_down_texture(index))
+                            .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                            .unwrap_or(egui::Vec2::ZERO);
+                        next_size = self
+                            .top_down_texture(self.current_index + 1)
+                            .map(|tex| self.top_down_image_draw_size(tex, container_size))
+                            .unwrap_or(egui::Vec2::ZERO);
+                        current_bias =
+                            self.top_down_anchor_bias(self.current_index, current_size, rect);
+                        prev_distance = if prev_size != egui::Vec2::ZERO {
+                            current_size.y * 0.5 + page_gap + prev_size.y * 0.5
+                        } else {
+                            0.0
+                        };
+                        next_distance = if next_size != egui::Vec2::ZERO {
+                            current_size.y * 0.5 + page_gap + next_size.y * 0.5
+                        } else {
+                            0.0
+                        };
+                    }
+
+                    self.top_down_scroll_offset = current_position_offset - current_bias;
+                    current_center_y = rect.center().y + current_position_offset;
+
+                    if let Some(prev_index) = self.current_index.checked_sub(1) {
+                        if let Some(tex) = self.top_down_texture(prev_index) {
+                            let size = self.top_down_image_draw_size(tex, container_size);
+                            let center =
+                                egui::pos2(rect.center().x, current_center_y - prev_distance);
+                            ui.painter().image(
+                                tex.id(),
+                                egui::Rect::from_center_size(center, size),
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                                egui::Color32::WHITE,
+                            );
+
+                            if let Some(prev_prev_index) = self.current_index.checked_sub(2) {
+                                if let Some(prev_prev_tex) = self.top_down_texture(prev_prev_index)
+                                {
+                                    let prev_prev_size =
+                                        self.top_down_image_draw_size(prev_prev_tex, container_size);
+                                    let prev_prev_distance = prev_distance
+                                        + size.y * 0.5
+                                        + page_gap
+                                        + prev_prev_size.y * 0.5;
+                                    let prev_prev_center = egui::pos2(
+                                        rect.center().x,
+                                        current_center_y - prev_prev_distance,
+                                    );
+                                    ui.painter().image(
+                                        prev_prev_tex.id(),
+                                        egui::Rect::from_center_size(
+                                            prev_prev_center,
+                                            prev_prev_size,
+                                        ),
+                                        egui::Rect::from_min_max(
+                                            egui::Pos2::ZERO,
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    if let Some(tex) = self.top_down_texture(self.current_index) {
+                        let size = self.top_down_image_draw_size(tex, container_size);
+                        let center = egui::pos2(rect.center().x, current_center_y);
+                        ui.painter().image(
+                            tex.id(),
+                            egui::Rect::from_center_size(center, size),
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                    if let Some(tex) = self.top_down_texture(self.current_index + 1) {
+                        let size = self.top_down_image_draw_size(tex, container_size);
+                        let center = egui::pos2(rect.center().x, current_center_y + next_distance);
+                        ui.painter().image(
+                            tex.id(),
+                            egui::Rect::from_center_size(center, size),
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+
+                        if let Some(next_next_tex) = self.top_down_texture(self.current_index + 2) {
+                            let next_next_size =
+                                self.top_down_image_draw_size(next_next_tex, container_size);
+                            let next_next_distance =
+                                next_distance + size.y * 0.5 + page_gap + next_next_size.y * 0.5;
+                            let next_next_center =
+                                egui::pos2(rect.center().x, current_center_y + next_next_distance);
+                            ui.painter().image(
+                                next_next_tex.id(),
+                                egui::Rect::from_center_size(next_next_center, next_next_size),
+                                egui::Rect::from_min_max(
+                                    egui::Pos2::ZERO,
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        let start_btn = egui::Button::new(
+                            egui::RichText::new(tr("start.open_zip"))
+                                .size(20.0)
+                                .color(egui::Color32::from_gray(200)),
+                        )
+                        .fill(egui::Color32::from_gray(40));
+                        if ui.add_sized(ctx.content_rect().size(), start_btn).clicked() {
+                            self.open_file_dialog();
+                        }
+                    });
+                }
+
                 self.render_error_overlay(ctx, ui);
                 self.render_zip_name_overlay(ctx, ui);
                 self.render_page_indicator_overlay(ctx);

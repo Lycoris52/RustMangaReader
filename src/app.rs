@@ -1,6 +1,7 @@
 use crate::config::{
-    AppSettings, GamepadButton, ImageSizingMode, LastPageAction, MangaAction, MouseButton,
-    MouseGesture, PageViewOptions, ResizeMethod, Shortcut, SourceMode, UiLanguage,
+    AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, KeyConfig, LastPageAction,
+    MangaAction, MouseButton, MouseConfig, MouseGesture, PageViewOptions, ResizeMethod, Shortcut,
+    SourceMode, UiLanguage,
 };
 use crate::font;
 use crate::localize::{set_language, tr};
@@ -29,10 +30,353 @@ use std::time::{Duration, Instant};
 const LONG_CLICK_DURATION: Duration = Duration::from_millis(450);
 const GAMEPAD_INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(800);
 const MOUSE_DRAG_THRESHOLD: f32 = 6.0;
+const SETTINGS_TOGGLE_FADE_DURATION: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ControlProfile {
+    Default,
+    TopDown,
+}
 
 #[derive(Clone, PartialEq)]
 enum BindingTarget {
-    Keyboard(String),
+    Keyboard {
+        profile: ControlProfile,
+        action: String,
+    },
+}
+
+fn render_binding_button(
+    ui: &mut egui::Ui,
+    id: &str,
+    shortcut: &mut Option<Shortcut>,
+    binding: &mut Option<BindingTarget>,
+    profile: ControlProfile,
+    listening_text: &str,
+) {
+    let is_binding = matches!(
+        binding,
+        Some(BindingTarget::Keyboard { profile: binding_profile, action })
+            if *binding_profile == profile && action == id
+    );
+    let text = if is_binding {
+        listening_text.to_string()
+    } else {
+        shortcut
+            .map(|shortcut| shortcut.format())
+            .unwrap_or_else(|| tr("common.unassigned").to_owned())
+    };
+
+    if ui.button(text).clicked() {
+        *binding = Some(BindingTarget::Keyboard {
+            profile,
+            action: id.to_string(),
+        });
+    }
+}
+
+fn gamepad_action_mut(config: &mut GamepadConfig, button: GamepadButton) -> &mut MangaAction {
+    match button {
+        GamepadButton::South => &mut config.south,
+        GamepadButton::East => &mut config.east,
+        GamepadButton::North => &mut config.north,
+        GamepadButton::West => &mut config.west,
+        GamepadButton::LeftTrigger => &mut config.left_trigger,
+        GamepadButton::LeftTrigger2 => &mut config.left_trigger2,
+        GamepadButton::RightTrigger => &mut config.right_trigger,
+        GamepadButton::RightTrigger2 => &mut config.right_trigger2,
+        GamepadButton::Select => &mut config.select,
+        GamepadButton::Start => &mut config.start,
+        GamepadButton::LeftThumb => &mut config.left_thumb,
+        GamepadButton::RightThumb => &mut config.right_thumb,
+        GamepadButton::DPadUp => &mut config.dpad_up,
+        GamepadButton::DPadDown => &mut config.dpad_down,
+        GamepadButton::DPadLeft => &mut config.dpad_left,
+        GamepadButton::DPadRight => &mut config.dpad_right,
+    }
+}
+
+fn render_control_mapping_settings(
+    ui: &mut egui::Ui,
+    profile: ControlProfile,
+    keys: &mut KeyConfig,
+    mouse: &mut MouseConfig,
+    gamepad: &mut GamepadConfig,
+    double_click_threshold_ms: &mut u64,
+    binding_action: &mut Option<BindingTarget>,
+) -> bool {
+    let mut changed = false;
+    let listening_text = tr("common.listening").to_owned();
+
+    egui::CollapsingHeader::new(
+        egui::RichText::new(tr("settings.key_config"))
+            .size(20.0)
+            .strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        separator_pct(ui);
+        egui::Grid::new(format!("key_grid_{profile:?}"))
+            .num_columns(2)
+            .spacing([20.0, 10.0])
+            .show(ui, |ui| {
+                for (label, id, shortcut) in [
+                    (
+                        tr("settings.key.slide_image_down"),
+                        "Slide Image Down",
+                        &mut keys.slide_image_down,
+                    ),
+                    (
+                        tr("settings.key.slide_image_up"),
+                        "Slide Image Up",
+                        &mut keys.slide_image_up,
+                    ),
+                    (
+                        tr("settings.key.next_page"),
+                        "Next Page",
+                        &mut keys.next_page,
+                    ),
+                    (
+                        tr("settings.key.prev_page"),
+                        "Previous Page",
+                        &mut keys.prev_page,
+                    ),
+                    (
+                        tr("settings.key.one_next_page"),
+                        "1 Next Page",
+                        &mut keys.one_next_page,
+                    ),
+                    (
+                        tr("settings.key.one_prev_page"),
+                        "1 Prev Page",
+                        &mut keys.one_prev_page,
+                    ),
+                    (
+                        tr("settings.key.first_page"),
+                        "First Page",
+                        &mut keys.first_page,
+                    ),
+                    (
+                        tr("settings.key.last_page"),
+                        "Last Page",
+                        &mut keys.last_page,
+                    ),
+                    (
+                        tr("settings.key.next_file"),
+                        "Next File",
+                        &mut keys.next_file,
+                    ),
+                    (
+                        tr("settings.key.prev_file"),
+                        "Previous File",
+                        &mut keys.prev_file,
+                    ),
+                    (
+                        tr("settings.key.next_folder"),
+                        "Next Folder",
+                        &mut keys.next_folder,
+                    ),
+                    (
+                        tr("settings.key.prev_folder"),
+                        "Previous Folder",
+                        &mut keys.prev_folder,
+                    ),
+                    (
+                        tr("settings.key.fullscreen"),
+                        "Toggle Fullscreen",
+                        &mut keys.fullscreen,
+                    ),
+                    (
+                        tr("settings.key.view_mode"),
+                        "View Mode",
+                        &mut keys.view_mode,
+                    ),
+                    (
+                        tr("settings.key.open_file"),
+                        "Open File",
+                        &mut keys.open_file,
+                    ),
+                    (tr("settings.key.quit_app"), "Quit App", &mut keys.quit_app),
+                ] {
+                    ui.label(label);
+                    render_binding_button(
+                        ui,
+                        id,
+                        shortcut,
+                        binding_action,
+                        profile,
+                        &listening_text,
+                    );
+                    ui.end_row();
+                }
+            });
+        separator_pct(ui);
+    });
+
+    ui.add_space(20.0);
+    egui::CollapsingHeader::new(
+        egui::RichText::new(tr("settings.mouse_mapping"))
+            .size(20.0)
+            .strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        separator_pct(ui);
+        ui.label(tr("settings.mouse_mapping.description"));
+        ui.add_space(10.0);
+        changed |= ui
+            .add(
+                egui::Slider::new(double_click_threshold_ms, 100..=1000)
+                    .text(tr("settings.double_click_threshold")),
+            )
+            .changed();
+        ui.add_space(10.0);
+        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
+            .into_iter()
+            .map(|action| (action, action_label(action).to_owned()))
+            .collect();
+        let unassigned_label = tr("common.unassigned").to_owned();
+        egui::Grid::new(format!("mouse_grid_{profile:?}"))
+            .num_columns(2)
+            .spacing([20.0, 10.0])
+            .show(ui, |ui| {
+                for (label, id, action) in [
+                    (
+                        tr("settings.mouse.scroll_up"),
+                        "mouse_scroll_up",
+                        &mut mouse.scroll_up,
+                    ),
+                    (
+                        tr("settings.mouse.scroll_down"),
+                        "mouse_scroll_down",
+                        &mut mouse.scroll_down,
+                    ),
+                    (
+                        tr("settings.mouse.button1_click"),
+                        "mouse_button1_click",
+                        &mut mouse.button1_click,
+                    ),
+                    (
+                        tr("settings.mouse.button2_click"),
+                        "mouse_button2_click",
+                        &mut mouse.button2_click,
+                    ),
+                    (
+                        tr("settings.mouse.button3_click"),
+                        "mouse_button3_click",
+                        &mut mouse.button3_click,
+                    ),
+                    (
+                        tr("settings.mouse.button4_click"),
+                        "mouse_button4_click",
+                        &mut mouse.button4_click,
+                    ),
+                    (
+                        tr("settings.mouse.button5_click"),
+                        "mouse_button5_click",
+                        &mut mouse.button5_click,
+                    ),
+                    (
+                        tr("settings.mouse.button1_double_click"),
+                        "mouse_button1_double_click",
+                        &mut mouse.button1_double_click,
+                    ),
+                    (
+                        tr("settings.mouse.button2_double_click"),
+                        "mouse_button2_double_click",
+                        &mut mouse.button2_double_click,
+                    ),
+                    (
+                        tr("settings.mouse.button3_double_click"),
+                        "mouse_button3_double_click",
+                        &mut mouse.button3_double_click,
+                    ),
+                    (
+                        tr("settings.mouse.button4_double_click"),
+                        "mouse_button4_double_click",
+                        &mut mouse.button4_double_click,
+                    ),
+                    (
+                        tr("settings.mouse.button5_double_click"),
+                        "mouse_button5_double_click",
+                        &mut mouse.button5_double_click,
+                    ),
+                    (
+                        tr("settings.mouse.button1_long_click"),
+                        "mouse_button1_long_click",
+                        &mut mouse.button1_long_click,
+                    ),
+                    (
+                        tr("settings.mouse.button2_long_click"),
+                        "mouse_button2_long_click",
+                        &mut mouse.button2_long_click,
+                    ),
+                    (
+                        tr("settings.mouse.button3_long_click"),
+                        "mouse_button3_long_click",
+                        &mut mouse.button3_long_click,
+                    ),
+                    (
+                        tr("settings.mouse.button4_long_click"),
+                        "mouse_button4_long_click",
+                        &mut mouse.button4_long_click,
+                    ),
+                    (
+                        tr("settings.mouse.button5_long_click"),
+                        "mouse_button5_long_click",
+                        &mut mouse.button5_long_click,
+                    ),
+                ] {
+                    ui.label(label);
+                    changed |= render_mouse_action_dropdown(
+                        ui,
+                        &format!("{id}_{profile:?}"),
+                        action,
+                        &action_options,
+                        &unassigned_label,
+                    );
+                    ui.end_row();
+                }
+            });
+        separator_pct(ui);
+    });
+
+    ui.add_space(20.0);
+    egui::CollapsingHeader::new(
+        egui::RichText::new(tr("settings.gamepad_mapping"))
+            .size(20.0)
+            .strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        separator_pct(ui);
+        ui.label(tr("settings.gamepad_mapping.description"));
+        ui.add_space(10.0);
+        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
+            .into_iter()
+            .map(|action| (action, action_label(action).to_owned()))
+            .collect();
+        let unassigned_label = tr("common.unassigned").to_owned();
+        egui::Grid::new(format!("gamepad_grid_{profile:?}"))
+            .num_columns(2)
+            .spacing([20.0, 10.0])
+            .show(ui, |ui| {
+                for button in GamepadButton::ALL {
+                    ui.label(gamepad_button_label(button));
+                    changed |= render_mouse_action_dropdown(
+                        ui,
+                        &format!("gamepad_{profile:?}_{button:?}"),
+                        gamepad_action_mut(gamepad, button),
+                        &action_options,
+                        &unassigned_label,
+                    );
+                    ui.end_row();
+                }
+            });
+        separator_pct(ui);
+    });
+
+    changed
 }
 
 pub struct MangaReader {
@@ -42,6 +386,8 @@ pub struct MangaReader {
     textures: [Option<egui::TextureHandle>; 2],
     buffer_next: [Option<egui::TextureHandle>; 2],
     buffer_prev: [Option<egui::TextureHandle>; 2],
+    top_down_textures: Vec<Option<egui::TextureHandle>>,
+    top_down_scroll_offset: f32,
     last_buffered_index: Option<usize>,
     all_zips_in_folder: Vec<PathBuf>,
     error_msg: Option<(String, Instant)>,
@@ -70,6 +416,8 @@ pub struct MangaReader {
     pending_mouse_click: [Option<(Instant, MangaAction)>; 5],
     gamepad: Option<Gilrs>,
     gamepad_repeat_deadlines: [Option<Instant>; 16],
+    selected_control_profile: ControlProfile,
+    settings_toggle_last_visible_at: Instant,
 }
 
 impl MangaReader {
@@ -100,6 +448,8 @@ impl MangaReader {
             textures: [None, None],
             buffer_next: [None, None],
             buffer_prev: [None, None],
+            top_down_textures: Vec::new(),
+            top_down_scroll_offset: 0.0,
             last_buffered_index: None,
             all_zips_in_folder: Vec::new(),
             error_msg: None,
@@ -127,6 +477,8 @@ impl MangaReader {
             pending_mouse_click: [None; 5],
             gamepad: Gilrs::new().ok(),
             gamepad_repeat_deadlines: [None; 16],
+            selected_control_profile: ControlProfile::Default,
+            settings_toggle_last_visible_at: Instant::now(),
         }
     }
 
@@ -206,6 +558,75 @@ impl MangaReader {
                 egui::vec2(width, width / aspect_ratio)
             }
             ImageSizingMode::OriginalSize => tex_size * zoom_factor,
+        }
+    }
+
+    fn top_down_image_draw_size(
+        &self,
+        tex: &egui::TextureHandle,
+        container_size: egui::Vec2,
+    ) -> egui::Vec2 {
+        let tex_size = tex.size_vec2();
+        let aspect_ratio = tex_size.x / tex_size.y;
+        match self.config.image_sizing_mode {
+            ImageSizingMode::FitHeight => {
+                let height = container_size.y.max(1.0) * self.zoom_factor;
+                egui::vec2(height * aspect_ratio, height)
+            }
+            ImageSizingMode::FitWidth => {
+                let width = container_size.x.max(1.0) * self.zoom_factor;
+                egui::vec2(width, width / aspect_ratio)
+            }
+            ImageSizingMode::OriginalSize => tex_size * self.zoom_factor,
+        }
+    }
+
+    fn reset_top_down_buffer(&mut self) {
+        self.top_down_textures = vec![None; self.image_files.len()];
+        self.top_down_scroll_offset = 0.0;
+    }
+
+    fn ensure_top_down_texture_loaded(&mut self, index: usize, ctx: &egui::Context) {
+        if index >= self.image_files.len() {
+            return;
+        }
+        if self.top_down_textures.len() != self.image_files.len() {
+            self.reset_top_down_buffer();
+        }
+        if self.top_down_textures[index].is_some() {
+            return;
+        }
+
+        let pair = self.load_pair(index, ctx);
+        self.top_down_textures[index] = pair[0].clone();
+        if index + 1 < self.top_down_textures.len() {
+            self.top_down_textures[index + 1] = pair[1].clone();
+        }
+    }
+
+    pub(super) fn ensure_top_down_loaded_around(&mut self, index: usize, ctx: &egui::Context) {
+        if self.image_files.is_empty() {
+            return;
+        }
+        let first = index.saturating_sub(2);
+        let last = index
+            .saturating_add(2)
+            .min(self.image_files.len().saturating_sub(1));
+        for page_index in first..=last {
+            self.ensure_top_down_texture_loaded(page_index, ctx);
+        }
+    }
+
+    pub(super) fn top_down_texture(&self, index: usize) -> Option<&egui::TextureHandle> {
+        self.top_down_textures.get(index)?.as_ref()
+    }
+
+    pub(super) fn clamp_top_down_scroll_offset(&mut self) {
+        if self.current_index == 0 && self.top_down_scroll_offset > 0.0 {
+            self.top_down_scroll_offset = 0.0;
+        }
+        if self.current_index + 1 >= self.image_files.len() && self.top_down_scroll_offset < 0.0 {
+            self.top_down_scroll_offset = 0.0;
         }
     }
 
@@ -406,7 +827,11 @@ impl MangaReader {
     ) -> Option<egui::TextureHandle> {
         let resize_start = Instant::now();
         let filter = self.config.resize_method.to_filter();
-        let processed_img = if let Some(filter_type) = filter {
+        let top_down_fit_height_noop = self.config.page_view_options == PageViewOptions::TopDown
+            && self.config.image_sizing_mode == ImageSizingMode::FitHeight;
+        let processed_img = if top_down_fit_height_noop {
+            img
+        } else if let Some(filter_type) = filter {
             if self.config.image_sizing_mode == ImageSizingMode::OriginalSize {
                 img
             } else {
@@ -596,6 +1021,11 @@ impl MangaReader {
             }
 
             self.textures = self.load_pair(self.current_index, ctx);
+            self.reset_top_down_buffer();
+            self.ensure_top_down_loaded_around(self.current_index, ctx);
+            for index in 0..self.image_files.len().min(5) {
+                self.ensure_top_down_texture_loaded(index, ctx);
+            }
         }
 
         self.page_indicator_time = Some(Instant::now());
@@ -627,8 +1057,11 @@ impl MangaReader {
         if self.current_index + step < self.image_files.len() {
             self.current_index += step;
             self.reset_pan();
-            // If the next pages are already in the buffer, swap them in
-            if self.buffer_next[0].is_some() {
+            self.top_down_scroll_offset = 0.0;
+            if self.config.page_view_options == PageViewOptions::TopDown {
+                self.ensure_top_down_loaded_around(self.current_index, ctx);
+            } else if self.buffer_next[0].is_some() {
+                // If the next pages are already in the buffer, swap them in
                 // Take the textures from the buffer and put them in the active slot
                 // also slide the current texture to prev buffer
                 self.buffer_prev = std::mem::take(&mut self.textures);
@@ -674,8 +1107,11 @@ impl MangaReader {
         if self.current_index >= step {
             self.current_index -= step;
             self.reset_pan();
-            // Use the previous buffer textures
-            if self.buffer_prev[0].is_some() {
+            self.top_down_scroll_offset = 0.0;
+            if self.config.page_view_options == PageViewOptions::TopDown {
+                self.ensure_top_down_loaded_around(self.current_index, ctx);
+            } else if self.buffer_prev[0].is_some() {
+                // Use the previous buffer textures
                 self.buffer_next = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_prev);
             } else {
@@ -792,38 +1228,35 @@ impl MangaReader {
     fn reset_buffer(&mut self) {
         self.buffer_prev = [None, None];
         self.buffer_next = [None, None];
+        self.top_down_textures.clear();
+        self.top_down_scroll_offset = 0.0;
     }
 
     fn get_mouse_action(&self, gesture: MouseGesture) -> MangaAction {
+        let mouse = if self.config.page_view_options == PageViewOptions::TopDown {
+            self.config.top_down_mouse
+        } else {
+            self.config.mouse
+        };
         match gesture {
             MouseGesture::Unassigned => MangaAction::None,
-            MouseGesture::ScrollUp => self.config.mouse.scroll_up,
-            MouseGesture::ScrollDown => self.config.mouse.scroll_down,
-            MouseGesture::Click(MouseButton::Button1) => self.config.mouse.button1_click,
-            MouseGesture::Click(MouseButton::Button2) => self.config.mouse.button2_click,
-            MouseGesture::Click(MouseButton::Button3) => self.config.mouse.button3_click,
-            MouseGesture::Click(MouseButton::Button4) => self.config.mouse.button4_click,
-            MouseGesture::Click(MouseButton::Button5) => self.config.mouse.button5_click,
-            MouseGesture::DoubleClick(MouseButton::Button1) => {
-                self.config.mouse.button1_double_click
-            }
-            MouseGesture::DoubleClick(MouseButton::Button2) => {
-                self.config.mouse.button2_double_click
-            }
-            MouseGesture::DoubleClick(MouseButton::Button3) => {
-                self.config.mouse.button3_double_click
-            }
-            MouseGesture::DoubleClick(MouseButton::Button4) => {
-                self.config.mouse.button4_double_click
-            }
-            MouseGesture::DoubleClick(MouseButton::Button5) => {
-                self.config.mouse.button5_double_click
-            }
-            MouseGesture::LongClick(MouseButton::Button1) => self.config.mouse.button1_long_click,
-            MouseGesture::LongClick(MouseButton::Button2) => self.config.mouse.button2_long_click,
-            MouseGesture::LongClick(MouseButton::Button3) => self.config.mouse.button3_long_click,
-            MouseGesture::LongClick(MouseButton::Button4) => self.config.mouse.button4_long_click,
-            MouseGesture::LongClick(MouseButton::Button5) => self.config.mouse.button5_long_click,
+            MouseGesture::ScrollUp => mouse.scroll_up,
+            MouseGesture::ScrollDown => mouse.scroll_down,
+            MouseGesture::Click(MouseButton::Button1) => mouse.button1_click,
+            MouseGesture::Click(MouseButton::Button2) => mouse.button2_click,
+            MouseGesture::Click(MouseButton::Button3) => mouse.button3_click,
+            MouseGesture::Click(MouseButton::Button4) => mouse.button4_click,
+            MouseGesture::Click(MouseButton::Button5) => mouse.button5_click,
+            MouseGesture::DoubleClick(MouseButton::Button1) => mouse.button1_double_click,
+            MouseGesture::DoubleClick(MouseButton::Button2) => mouse.button2_double_click,
+            MouseGesture::DoubleClick(MouseButton::Button3) => mouse.button3_double_click,
+            MouseGesture::DoubleClick(MouseButton::Button4) => mouse.button4_double_click,
+            MouseGesture::DoubleClick(MouseButton::Button5) => mouse.button5_double_click,
+            MouseGesture::LongClick(MouseButton::Button1) => mouse.button1_long_click,
+            MouseGesture::LongClick(MouseButton::Button2) => mouse.button2_long_click,
+            MouseGesture::LongClick(MouseButton::Button3) => mouse.button3_long_click,
+            MouseGesture::LongClick(MouseButton::Button4) => mouse.button4_long_click,
+            MouseGesture::LongClick(MouseButton::Button5) => mouse.button5_long_click,
         }
     }
 
@@ -832,7 +1265,11 @@ impl MangaReader {
     }
 
     fn collect_gamepad_action(&mut self, ctx: &egui::Context) -> Option<MangaAction> {
-        let gamepad_config = self.config.gamepad;
+        let gamepad_config = if self.config.page_view_options == PageViewOptions::TopDown {
+            self.config.top_down_gamepad
+        } else {
+            self.config.gamepad
+        };
         let repeat_interval = self.gamepad_repeat_interval();
         let gilrs = self.gamepad.as_mut()?;
         let mut action_to_run = None;
@@ -891,7 +1328,12 @@ impl MangaReader {
     }
 
     fn double_click_threshold(&self) -> Duration {
-        Duration::from_millis(self.config.double_click_threshold_ms)
+        let threshold_ms = if self.config.page_view_options == PageViewOptions::TopDown {
+            self.config.top_down_double_click_threshold_ms
+        } else {
+            self.config.double_click_threshold_ms
+        };
+        Duration::from_millis(threshold_ms)
     }
 
     fn collect_pending_mouse_click_action(&mut self, ctx: &egui::Context) -> Option<MangaAction> {
@@ -1030,6 +1472,21 @@ impl MangaReader {
 
         let scroll_delta = ctx.input(|i| i.smooth_scroll_delta);
         let scroll_threshold = 2.0;
+        if self.config.page_view_options == PageViewOptions::TopDown {
+            if scroll_delta.y > scroll_threshold || scroll_delta.x > scroll_threshold {
+                let action = self.get_mouse_action(MouseGesture::ScrollUp);
+                if action != MangaAction::None {
+                    return Some(action);
+                }
+            } else if scroll_delta.y < -scroll_threshold || scroll_delta.x < -scroll_threshold {
+                let action = self.get_mouse_action(MouseGesture::ScrollDown);
+                if action != MangaAction::None {
+                    return Some(action);
+                }
+            }
+            return None;
+        }
+
         if self.can_scroll {
             if scroll_delta.y > scroll_threshold || scroll_delta.x > scroll_threshold {
                 self.can_scroll = false;
@@ -1055,6 +1512,20 @@ impl MangaReader {
 
     fn execute_action(&mut self, action: MangaAction, ctx: &egui::Context) {
         match action {
+            MangaAction::SlideImageDown => {
+                if self.config.page_view_options == PageViewOptions::TopDown {
+                    self.top_down_scroll_offset -=
+                        ctx.content_rect().height() * self.config.top_down_image_slide_speed;
+                    self.clamp_top_down_scroll_offset();
+                }
+            }
+            MangaAction::SlideImageUp => {
+                if self.config.page_view_options == PageViewOptions::TopDown {
+                    self.top_down_scroll_offset +=
+                        ctx.content_rect().height() * self.config.top_down_image_slide_speed;
+                    self.clamp_top_down_scroll_offset();
+                }
+            }
             MangaAction::NextPage => self.next_page(ctx, false),
             MangaAction::PrevPage => self.prev_page(ctx, false),
             MangaAction::OneNextPage => self.next_page(ctx, true),
@@ -1129,7 +1600,10 @@ impl MangaReader {
     }
 
     fn is_single_page(&self) -> bool {
-        self.config.page_view_options == PageViewOptions::Single
+        matches!(
+            self.config.page_view_options,
+            PageViewOptions::Single | PageViewOptions::TopDown
+        )
     }
 
     fn change_shifted_mode(&mut self, ctx: &egui::Context) {
@@ -1183,7 +1657,7 @@ impl eframe::App for MangaReader {
         // REBINDING LOGIC
         if let Some(binding_target) = self.binding_action.clone() {
             match binding_target {
-                BindingTarget::Keyboard(action_name) => {
+                BindingTarget::Keyboard { profile, action } => {
                     ctx.input(|i| {
                         for key in egui::Key::ALL {
                             if i.key_pressed(*key) {
@@ -1194,25 +1668,29 @@ impl eframe::App for MangaReader {
                                     shift: i.modifiers.shift,
                                 };
 
-                                match action_name.as_str() {
-                                    "Next Page" => self.config.keys.next_page = new_shortcut,
-                                    "Previous Page" => self.config.keys.prev_page = new_shortcut,
-                                    "1 Next Page" => self.config.keys.one_next_page = new_shortcut,
-                                    "1 Prev Page" => self.config.keys.one_prev_page = new_shortcut,
-                                    "First Page" => self.config.keys.first_page = new_shortcut,
-                                    "Last Page" => self.config.keys.last_page = new_shortcut,
-                                    "Next File" => self.config.keys.next_file = new_shortcut,
-                                    "Previous File" => self.config.keys.prev_file = new_shortcut,
-                                    "Next Folder" => self.config.keys.next_folder = new_shortcut,
-                                    "Previous Folder" => {
-                                        self.config.keys.prev_folder = new_shortcut
+                                let keys = match profile {
+                                    ControlProfile::Default => &mut self.config.keys,
+                                    ControlProfile::TopDown => &mut self.config.top_down_keys,
+                                };
+                                match action.as_str() {
+                                    "Slide Image Down" => {
+                                        keys.slide_image_down = Some(new_shortcut)
                                     }
-                                    "Toggle Fullscreen" => {
-                                        self.config.keys.fullscreen = new_shortcut
-                                    }
-                                    "View Mode" => self.config.keys.view_mode = new_shortcut,
-                                    "Open File" => self.config.keys.open_file = new_shortcut,
-                                    "Quit App" => self.config.keys.quit_app = new_shortcut,
+                                    "Slide Image Up" => keys.slide_image_up = Some(new_shortcut),
+                                    "Next Page" => keys.next_page = Some(new_shortcut),
+                                    "Previous Page" => keys.prev_page = Some(new_shortcut),
+                                    "1 Next Page" => keys.one_next_page = Some(new_shortcut),
+                                    "1 Prev Page" => keys.one_prev_page = Some(new_shortcut),
+                                    "First Page" => keys.first_page = Some(new_shortcut),
+                                    "Last Page" => keys.last_page = Some(new_shortcut),
+                                    "Next File" => keys.next_file = Some(new_shortcut),
+                                    "Previous File" => keys.prev_file = Some(new_shortcut),
+                                    "Next Folder" => keys.next_folder = Some(new_shortcut),
+                                    "Previous Folder" => keys.prev_folder = Some(new_shortcut),
+                                    "Toggle Fullscreen" => keys.fullscreen = Some(new_shortcut),
+                                    "View Mode" => keys.view_mode = Some(new_shortcut),
+                                    "Open File" => keys.open_file = Some(new_shortcut),
+                                    "Quit App" => keys.quit_app = Some(new_shortcut),
                                     _ => {}
                                 }
                                 self.binding_action = None;
@@ -1226,16 +1704,28 @@ impl eframe::App for MangaReader {
         // PART B: EXECUTION LOGIC
         else {
             ctx.input(|i| {
-                let keys = self.config.keys;
-
-                // Helper to check if a shortcut is triggered
-                let is_triggered = |s: &Shortcut| {
-                    i.key_pressed(s.key)
-                        && i.modifiers.ctrl == s.ctrl
-                        && i.modifiers.alt == s.alt
-                        && i.modifiers.shift == s.shift
+                let keys = if self.config.page_view_options == PageViewOptions::TopDown {
+                    self.config.top_down_keys
+                } else {
+                    self.config.keys
                 };
 
+                // Helper to check if a shortcut is triggered
+                let is_triggered = |s: &Option<Shortcut>| {
+                    s.is_some_and(|s| {
+                        i.key_pressed(s.key)
+                            && i.modifiers.ctrl == s.ctrl
+                            && i.modifiers.alt == s.alt
+                            && i.modifiers.shift == s.shift
+                    })
+                };
+
+                if is_triggered(&keys.slide_image_down) {
+                    action_to_run = MangaAction::SlideImageDown;
+                }
+                if is_triggered(&keys.slide_image_up) {
+                    action_to_run = MangaAction::SlideImageUp;
+                }
                 if is_triggered(&keys.next_page) {
                     action_to_run = MangaAction::NextPage;
                 }
@@ -1335,7 +1825,7 @@ impl eframe::App for MangaReader {
 
                     // The rest becomes scrollable
                     egui::ScrollArea::vertical()
-                        .auto_shrink([false; 2])       // don't shrink content; enable scrolling
+                        .auto_shrink([false; 2]) // don't shrink content; enable scrolling
                         .show(ui, |ui| {
                             ui.vertical(|ui| {
                                 ui.add_space(10.0);
@@ -1351,23 +1841,44 @@ impl eframe::App for MangaReader {
                                     self.open_file_dialog();
                                 }
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("language.label")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("language.label"))
+                                        .size(20.0)
+                                        .strong(),
+                                );
                                 separator_pct(ui);
                                 let mut language_changed = false;
                                 let english_label = language_label(UiLanguage::English).to_owned();
-                                let japanese_label = language_label(UiLanguage::Japanese).to_owned();
+                                let japanese_label =
+                                    language_label(UiLanguage::Japanese).to_owned();
                                 egui::ComboBox::from_id_salt("language_select")
                                     .selected_text(language_label(self.config.language))
                                     .show_ui(ui, |ui| {
-                                        language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::English, &english_label).changed();
-                                        language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::Japanese, &japanese_label).changed();
+                                        language_changed |= ui
+                                            .selectable_value(
+                                                &mut self.config.language,
+                                                UiLanguage::English,
+                                                &english_label,
+                                            )
+                                            .changed();
+                                        language_changed |= ui
+                                            .selectable_value(
+                                                &mut self.config.language,
+                                                UiLanguage::Japanese,
+                                                &japanese_label,
+                                            )
+                                            .changed();
                                     });
                                 if language_changed {
                                     self.save_settings();
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("settings.image_scaling")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.image_scaling"))
+                                        .size(20.0)
+                                        .strong(),
+                                );
                                 separator_pct(ui);
 
                                 let visuals = ui.visuals_mut();
@@ -1376,11 +1887,41 @@ impl eframe::App for MangaReader {
 
                                 {
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::None, egui::RichText::new(tr("settings.scaling.none"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Nearest, egui::RichText::new(tr("settings.scaling.nearest"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Triangle, egui::RichText::new(tr("settings.scaling.triangle"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::CatmullRom, egui::RichText::new(tr("settings.scaling.catmullrom"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.resize_method, ResizeMethod::Lanczos3, egui::RichText::new(tr("settings.scaling.lanczos3"))).clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.resize_method,
+                                            ResizeMethod::None,
+                                            egui::RichText::new(tr("settings.scaling.none")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.resize_method,
+                                            ResizeMethod::Nearest,
+                                            egui::RichText::new(tr("settings.scaling.nearest")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.resize_method,
+                                            ResizeMethod::Triangle,
+                                            egui::RichText::new(tr("settings.scaling.triangle")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.resize_method,
+                                            ResizeMethod::CatmullRom,
+                                            egui::RichText::new(tr("settings.scaling.catmullrom")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.resize_method,
+                                            ResizeMethod::Lanczos3,
+                                            egui::RichText::new(tr("settings.scaling.lanczos3")),
+                                        )
+                                        .clicked();
 
                                     if changed {
                                         self.reset_buffer();
@@ -1391,46 +1932,124 @@ impl eframe::App for MangaReader {
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("settings.page_view")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.page_view"))
+                                        .size(20.0)
+                                        .strong(),
+                                );
                                 separator_pct(ui);
 
                                 {
+                                    let previous_page_view = self.config.page_view_options;
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new(tr("settings.page_view.single"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new(tr("settings.page_view.double_rl"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new(tr("settings.page_view.double_lr"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::TopDown, egui::RichText::new(tr("settings.page_view.top_down"))).clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.page_view_options,
+                                            PageViewOptions::Single,
+                                            egui::RichText::new(tr("settings.page_view.single")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.page_view_options,
+                                            PageViewOptions::DoubleRL,
+                                            egui::RichText::new(tr("settings.page_view.double_rl")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.page_view_options,
+                                            PageViewOptions::DoubleLR,
+                                            egui::RichText::new(tr("settings.page_view.double_lr")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.page_view_options,
+                                            PageViewOptions::TopDown,
+                                            egui::RichText::new(tr("settings.page_view.top_down")),
+                                        )
+                                        .clicked();
                                     separator_pct(ui);
-                                    ui.label(egui::RichText::new(tr("settings.page_view.center_offset")).size(20.0).strong());
+                                    ui.label(
+                                        egui::RichText::new(tr("settings.page_view.center_offset"))
+                                            .size(20.0)
+                                            .strong(),
+                                    );
                                     let slider_width = ui.available_width() * 0.98;
                                     let previous_slider_width = ui.spacing().slider_width;
                                     ui.spacing_mut().slider_width = slider_width - 80.0;
                                     changed |= ui
-                                        .add(egui::Slider::new(
-                                            &mut self.config.spread_center_offset,
-                                            -150.0..=150.0,
-                                        ).step_by(1.0))
-                                        .on_hover_text(tr("settings.page_view.center_offset.tooltip"))
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut self.config.spread_center_offset,
+                                                -150.0..=150.0,
+                                            )
+                                            .step_by(1.0),
+                                        )
+                                        .on_hover_text(tr(
+                                            "settings.page_view.center_offset.tooltip",
+                                        ))
                                         .changed();
                                     ui.spacing_mut().slider_width = previous_slider_width - 80.0;
 
                                     if changed {
                                         self.reset_buffer();
+                                        self.texture_cache.clear();
                                         self.reset_pan();
-                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        if self.config.page_view_options == PageViewOptions::TopDown
+                                        {
+                                            self.textures = [None, None];
+                                            self.top_down_textures =
+                                                vec![None; self.image_files.len()];
+                                            self.top_down_scroll_offset = 0.0;
+                                            self.ensure_top_down_loaded_around(
+                                                self.current_index,
+                                                ctx,
+                                            );
+                                        } else {
+                                            if previous_page_view == PageViewOptions::TopDown {
+                                                self.top_down_textures.clear();
+                                            }
+                                            self.textures = self.load_pair(self.current_index, ctx);
+                                        }
                                         self.save_settings();
                                     }
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("settings.last_page")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.last_page"))
+                                        .size(20.0)
+                                        .strong(),
+                                );
                                 separator_pct(ui);
 
                                 {
                                     let mut changed = false;
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::GotoNextFile, egui::RichText::new(tr("settings.last_page.next_file"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::ToFirstPage, egui::RichText::new(tr("settings.last_page.first_page"))).clicked();
-                                    changed |= ui.radio_value(&mut self.config.last_page_action, LastPageAction::Nothing, egui::RichText::new(tr("settings.last_page.nothing"))).clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.last_page_action,
+                                            LastPageAction::GotoNextFile,
+                                            egui::RichText::new(tr("settings.last_page.next_file")),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.last_page_action,
+                                            LastPageAction::ToFirstPage,
+                                            egui::RichText::new(tr(
+                                                "settings.last_page.first_page",
+                                            )),
+                                        )
+                                        .clicked();
+                                    changed |= ui
+                                        .radio_value(
+                                            &mut self.config.last_page_action,
+                                            LastPageAction::Nothing,
+                                            egui::RichText::new(tr("settings.last_page.nothing")),
+                                        )
+                                        .clicked();
 
                                     if changed {
                                         self.reset_buffer();
@@ -1440,12 +2059,18 @@ impl eframe::App for MangaReader {
                                 }
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("settings.zoom")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.zoom")).size(20.0).strong(),
+                                );
                                 separator_pct(ui);
 
                                 let previous_slider_width = ui.spacing().slider_width;
-                                ui.spacing_mut().slider_width = self.config.settings_width * 0.9 - 120.0;
-                                let zoom_slider = ui.add(egui::Slider::new(&mut self.zoom_factor, 0.5..=3.0).text(tr("settings.zoom.slider")));
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 120.0;
+                                let zoom_slider = ui.add(
+                                    egui::Slider::new(&mut self.zoom_factor, 0.1..=3.0)
+                                        .text(tr("settings.zoom.slider")),
+                                );
                                 ui.spacing_mut().slider_width = previous_slider_width;
                                 let is_scrubbing_zoom = zoom_slider.dragged();
                                 if zoom_slider.changed() && !is_scrubbing_zoom {
@@ -1457,13 +2082,19 @@ impl eframe::App for MangaReader {
                                     }
                                 }
 
-                                if ui.button(egui::RichText::new(tr("settings.zoom.reset"))).clicked() {
+                                if ui
+                                    .button(egui::RichText::new(tr("settings.zoom.reset")))
+                                    .clicked()
+                                {
                                     self.zoom_factor = 1.0;
                                     self.reset_pan();
                                 }
-
                                 ui.add_space(10.0);
-                                ui.label(egui::RichText::new(tr("settings.image_sizing")).size(18.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.image_sizing"))
+                                        .size(18.0)
+                                        .strong(),
+                                );
                                 let mut image_sizing_changed = false;
                                 image_sizing_changed |= ui
                                     .radio_value(
@@ -1496,7 +2127,11 @@ impl eframe::App for MangaReader {
                                 separator_pct(ui);
 
                                 ui.add_space(20.0);
-                                ui.label(egui::RichText::new(tr("settings.others")).size(20.0).strong());
+                                ui.label(
+                                    egui::RichText::new(tr("settings.others"))
+                                        .size(20.0)
+                                        .strong(),
+                                );
                                 separator_pct(ui);
                                 ui.horizontal(|ui| {
                                     ui.label(tr("settings.image_panel_background"));
@@ -1517,7 +2152,10 @@ impl eframe::App for MangaReader {
                                         self.save_settings();
                                     }
                                 });
-                                ui.checkbox(&mut self.config.show_top_bar, tr("settings.show_toolbar"));
+                                ui.checkbox(
+                                    &mut self.config.show_top_bar,
+                                    tr("settings.show_toolbar"),
+                                );
                                 // setting for auto hide the setting button
                                 if ui
                                     .checkbox(
@@ -1528,215 +2166,110 @@ impl eframe::App for MangaReader {
                                 {
                                     self.save_settings();
                                 }
-                                ui.checkbox(&mut self.config.transparency_support, tr("settings.transparency"))
-                                    .on_hover_text(tr("settings.transparency.tooltip"));
-                                ui.checkbox(&mut self.config.enable_auto_image_byte_fix, tr("settings.auto_image_fix"))
-                                    .on_hover_text(tr("settings.auto_image_fix.tooltip"));
-                                ui.checkbox(&mut self.config.enable_single_file_caching, tr("settings.single_file_cache"))
-                                    .on_hover_text(tr("settings.single_file_cache.tooltip"));
-                                ui.add(egui::Slider::new(&mut self.config.image_delay, 0..=1000)
-                                    .text(tr("settings.image_delay"))).on_hover_text(tr("settings.image_delay.tooltip"));
+                                ui.checkbox(
+                                    &mut self.config.transparency_support,
+                                    tr("settings.transparency"),
+                                )
+                                .on_hover_text(tr("settings.transparency.tooltip"));
+                                ui.checkbox(
+                                    &mut self.config.enable_auto_image_byte_fix,
+                                    tr("settings.auto_image_fix"),
+                                )
+                                .on_hover_text(tr("settings.auto_image_fix.tooltip"));
+                                ui.checkbox(
+                                    &mut self.config.enable_single_file_caching,
+                                    tr("settings.single_file_cache"),
+                                )
+                                .on_hover_text(tr("settings.single_file_cache.tooltip"));
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 150.0;
+                                ui.add(
+                                    egui::Slider::new(&mut self.config.image_delay, 0..=1000)
+                                        .text(tr("settings.image_delay")),
+                                )
+                                .on_hover_text(tr("settings.image_delay.tooltip"));
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 150.0;
+                                let mut slide_speed_slider =
+                                    (self.config.top_down_image_slide_speed.max(0.005) / 0.05)
+                                        .log10()
+                                        * 10.0;
+                                slide_speed_slider = slide_speed_slider.clamp(-10.0, 10.0);
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut slide_speed_slider, -10.0..=10.0)
+                                            .text(tr("settings.top_down_slide_speed")),
+                                    )
+                                    .on_hover_text(tr("settings.top_down_slide_speed.tooltip"))
+                                    .changed()
+                                {
+                                    self.config.top_down_image_slide_speed =
+                                        0.05 * 10.0_f32.powf(slide_speed_slider / 10.0);
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 150.0;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.top_down_image_drag_speed,
+                                            0.1..=5.0,
+                                        )
+                                        .text(tr("settings.top_down_drag_speed")),
+                                    )
+                                    .on_hover_text(tr("settings.top_down_drag_speed.tooltip"))
+                                    .changed()
+                                {
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
                                 ui.add_space(20.0);
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(
+                                        &mut self.selected_control_profile,
+                                        ControlProfile::Default,
+                                        tr("settings.control.default_view"),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.selected_control_profile,
+                                        ControlProfile::TopDown,
+                                        tr("settings.control.top_down_view"),
+                                    );
+                                });
+                                separator_pct(ui);
 
-                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.key_config")).size(20.0).strong())
-                                    .default_open(true)
-                                    .show(ui, |ui| {
-                                        separator_pct(ui);
-                                        let listening_text = tr("common.listening").to_owned();
-                                        egui::Grid::new("key_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                            ui.label(tr("settings.key.next_page"));
-                                            render_binding_button(ui, "Next Page", &mut self.config.keys.next_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.prev_page"));
-                                            render_binding_button(ui, "Previous Page", &mut self.config.keys.prev_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.one_next_page"));
-                                            render_binding_button(ui, "1 Next Page", &mut self.config.keys.one_next_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.one_prev_page"));
-                                            render_binding_button(ui, "1 Prev Page", &mut self.config.keys.one_prev_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.first_page"));
-                                            render_binding_button(ui, "First Page", &mut self.config.keys.first_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.last_page"));
-                                            render_binding_button(ui, "Last Page", &mut self.config.keys.last_page, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.next_file"));
-                                            render_binding_button(ui, "Next File", &mut self.config.keys.next_file, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.prev_file"));
-                                            render_binding_button(ui, "Previous File", &mut self.config.keys.prev_file, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.next_folder"));
-                                            render_binding_button(ui, "Next Folder", &mut self.config.keys.next_folder, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.prev_folder"));
-                                            render_binding_button(ui, "Previous Folder", &mut self.config.keys.prev_folder, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.fullscreen"));
-                                            render_binding_button(ui, "Toggle Fullscreen", &mut self.config.keys.fullscreen, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.view_mode"));
-                                            render_binding_button(ui, "View Mode", &mut self.config.keys.view_mode, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.open_file"));
-                                            render_binding_button(ui, "Open File", &mut self.config.keys.open_file, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                            ui.label(tr("settings.key.quit_app"));
-                                            render_binding_button(ui, "Quit App", &mut self.config.keys.quit_app, &mut self.binding_action, &listening_text);
-                                            ui.end_row();
-                                        });
-                                        separator_pct(ui);
-                                    });
-
-                                ui.add_space(20.0);
-                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.mouse_mapping")).size(20.0).strong())
-                                    .default_open(true)
-                                    .show(ui, |ui| {
-                                        separator_pct(ui);
-                                        ui.label(tr("settings.mouse_mapping.description"));
-                                        ui.add_space(10.0);
-                                        let mut mouse_changed = false;
-                                        mouse_changed |= ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    &mut self.config.double_click_threshold_ms,
-                                                    100..=1000,
-                                                )
-                                                .text(tr("settings.double_click_threshold")),
-                                            )
-                                            .changed();
-                                        ui.add_space(10.0);
-                                        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
-                                            .into_iter()
-                                            .map(|action| (action, action_label(action).to_owned()))
-                                            .collect();
-                                        let unassigned_label = tr("common.unassigned").to_owned();
-                                        egui::Grid::new("mouse_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                            ui.label(tr("settings.mouse.scroll_up"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_up", &mut self.config.mouse.scroll_up, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.scroll_down"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_scroll_down", &mut self.config.mouse.scroll_down, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button1_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_click", &mut self.config.mouse.button1_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button2_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_click", &mut self.config.mouse.button2_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button3_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_click", &mut self.config.mouse.button3_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button4_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_click", &mut self.config.mouse.button4_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button5_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_click", &mut self.config.mouse.button5_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button1_double_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_double_click", &mut self.config.mouse.button1_double_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button2_double_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_double_click", &mut self.config.mouse.button2_double_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button3_double_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_double_click", &mut self.config.mouse.button3_double_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button4_double_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_double_click", &mut self.config.mouse.button4_double_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button5_double_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_double_click", &mut self.config.mouse.button5_double_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button1_long_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button1_long_click", &mut self.config.mouse.button1_long_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button2_long_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button2_long_click", &mut self.config.mouse.button2_long_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button3_long_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button3_long_click", &mut self.config.mouse.button3_long_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button4_long_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button4_long_click", &mut self.config.mouse.button4_long_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                            ui.label(tr("settings.mouse.button5_long_click"));
-                                            mouse_changed |= render_mouse_action_dropdown(ui, "mouse_button5_long_click", &mut self.config.mouse.button5_long_click, &action_options, &unassigned_label);
-                                            ui.end_row();
-                                        });
-                                        if mouse_changed {
-                                            self.save_settings();
-                                        }
-                                        separator_pct(ui);
-                                    });
-
-                                ui.add_space(20.0);
-                                egui::CollapsingHeader::new(egui::RichText::new(tr("settings.gamepad_mapping")).size(20.0).strong())
-                                    .default_open(true)
-                                    .show(ui, |ui| {
-                                        separator_pct(ui);
-                                        ui.label(tr("settings.gamepad_mapping.description"));
-                                        ui.add_space(10.0);
-                                        let mut gamepad_changed = false;
-                                        let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
-                                            .into_iter()
-                                            .map(|action| (action, action_label(action).to_owned()))
-                                            .collect();
-                                        let unassigned_label = tr("common.unassigned").to_owned();
-                                        egui::Grid::new("gamepad_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                                            for button in GamepadButton::ALL {
-                                                ui.label(gamepad_button_label(button));
-                                                let action = match button {
-                                                    GamepadButton::South => &mut self.config.gamepad.south,
-                                                    GamepadButton::East => &mut self.config.gamepad.east,
-                                                    GamepadButton::North => &mut self.config.gamepad.north,
-                                                    GamepadButton::West => &mut self.config.gamepad.west,
-                                                    GamepadButton::LeftTrigger => &mut self.config.gamepad.left_trigger,
-                                                    GamepadButton::LeftTrigger2 => &mut self.config.gamepad.left_trigger2,
-                                                    GamepadButton::RightTrigger => &mut self.config.gamepad.right_trigger,
-                                                    GamepadButton::RightTrigger2 => &mut self.config.gamepad.right_trigger2,
-                                                    GamepadButton::Select => &mut self.config.gamepad.select,
-                                                    GamepadButton::Start => &mut self.config.gamepad.start,
-                                                    GamepadButton::LeftThumb => &mut self.config.gamepad.left_thumb,
-                                                    GamepadButton::RightThumb => &mut self.config.gamepad.right_thumb,
-                                                    GamepadButton::DPadUp => &mut self.config.gamepad.dpad_up,
-                                                    GamepadButton::DPadDown => &mut self.config.gamepad.dpad_down,
-                                                    GamepadButton::DPadLeft => &mut self.config.gamepad.dpad_left,
-                                                    GamepadButton::DPadRight => &mut self.config.gamepad.dpad_right,
-                                                };
-                                                gamepad_changed |= render_mouse_action_dropdown(
-                                                    ui,
-                                                    &format!("gamepad_{button:?}"),
-                                                    action,
-                                                    &action_options,
-                                                    &unassigned_label,
-                                                );
-                                                ui.end_row();
-                                            }
-                                        });
-                                        if gamepad_changed {
-                                            self.save_settings();
-                                        }
-                                        separator_pct(ui);
-                                    });
+                                let controls_changed = match self.selected_control_profile {
+                                    ControlProfile::Default => render_control_mapping_settings(
+                                        ui,
+                                        ControlProfile::Default,
+                                        &mut self.config.keys,
+                                        &mut self.config.mouse,
+                                        &mut self.config.gamepad,
+                                        &mut self.config.double_click_threshold_ms,
+                                        &mut self.binding_action,
+                                    ),
+                                    ControlProfile::TopDown => render_control_mapping_settings(
+                                        ui,
+                                        ControlProfile::TopDown,
+                                        &mut self.config.top_down_keys,
+                                        &mut self.config.top_down_mouse,
+                                        &mut self.config.top_down_gamepad,
+                                        &mut self.config.top_down_double_click_threshold_ms,
+                                        &mut self.binding_action,
+                                    ),
+                                };
+                                if controls_changed {
+                                    self.save_settings();
+                                }
 
                                 ui.add_space(50.0);
+                            });
                         });
-
-
-                    });
-                    // Helper function to keep the UI code clean
-                    fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<BindingTarget>, listening_text: &str) {
-                        let is_binding = matches!(binding, Some(BindingTarget::Keyboard(action)) if action == id);
-                        let text = if is_binding { listening_text.to_string() } else { shortcut.format() };
-
-                        if ui.button(text).clicked() {
-                            *binding = Some(BindingTarget::Keyboard(id.to_string()));
-                        }
-                    }
-
                 });
         }
 
@@ -1764,11 +2297,26 @@ impl eframe::App for MangaReader {
         let is_pointer_near_right_edge = ctx
             .input(|i| i.pointer.hover_pos())
             .is_some_and(|pos| screen_rect.max.x - pos.x <= settings_toggle_reveal_width);
-        let should_show_settings_toggle = !self.config.auto_hide_settings_button
-            || self.image_files.is_empty()
-            || is_pointer_near_right_edge;
+        let settings_toggle_pinned = self.config.show_settings
+            || !self.config.auto_hide_settings_button
+            || self.image_files.is_empty();
+        let should_refresh_settings_toggle = settings_toggle_pinned || is_pointer_near_right_edge;
+        if should_refresh_settings_toggle {
+            self.settings_toggle_last_visible_at = Instant::now();
+        }
+        let fade_elapsed =
+            Instant::now().saturating_duration_since(self.settings_toggle_last_visible_at);
+        let settings_toggle_opacity = if should_refresh_settings_toggle {
+            1.0
+        } else {
+            (1.0 - fade_elapsed.as_secs_f32() / SETTINGS_TOGGLE_FADE_DURATION.as_secs_f32())
+                .clamp(0.0, 1.0)
+        };
 
-        if should_show_settings_toggle {
+        if settings_toggle_opacity > 0.0 {
+            if settings_toggle_opacity < 1.0 {
+                ctx.request_repaint();
+            }
             egui::Area::new(egui::Id::new("settings_toggle"))
                 .fixed_pos([x_pos, y_pos])
                 .show(ctx, |ui| {
@@ -1778,11 +2326,44 @@ impl eframe::App for MangaReader {
                         "◀"
                     };
 
-                    // We use add_sized to force the 200px height
-                    let toggle_btn = egui::Button::new(egui::RichText::new(text).size(20.0));
-                    if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
-                        self.config.show_settings = !self.config.show_settings;
-                    }
+                    ui.scope(|ui| {
+                        let mut visuals = ui.style().visuals.clone();
+                        visuals.widgets.inactive.bg_fill =
+                            visuals.widgets.inactive.bg_fill.gamma_multiply(settings_toggle_opacity);
+                        visuals.widgets.inactive.weak_bg_fill = visuals
+                            .widgets
+                            .inactive
+                            .weak_bg_fill
+                            .gamma_multiply(settings_toggle_opacity);
+                        visuals.widgets.inactive.bg_stroke.color = visuals
+                            .widgets
+                            .inactive
+                            .bg_stroke
+                            .color
+                            .gamma_multiply(settings_toggle_opacity);
+                        visuals.widgets.inactive.fg_stroke.color = visuals
+                            .widgets
+                            .inactive
+                            .fg_stroke
+                            .color
+                            .gamma_multiply(settings_toggle_opacity);
+                        visuals.override_text_color = Some(
+                            ui.visuals()
+                                .text_color()
+                                .gamma_multiply(settings_toggle_opacity),
+                        );
+                        ui.style_mut().visuals = visuals;
+
+                        let toggle_btn = egui::Button::new(
+                            egui::RichText::new(text)
+                                .size(20.0)
+                                .color(ui.visuals().text_color()),
+                        );
+                        if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
+                            self.config.show_settings = !self.config.show_settings;
+                            self.settings_toggle_last_visible_at = Instant::now();
+                        }
+                    });
                 });
         }
 

@@ -215,6 +215,8 @@ pub fn language_label(language: UiLanguage) -> &'static str {
 pub fn action_label(action: MangaAction) -> &'static str {
     match action {
         MangaAction::None => tr("action.none"),
+        MangaAction::SlideImageDown => tr("action.slide_image_down"),
+        MangaAction::SlideImageUp => tr("action.slide_image_up"),
         MangaAction::NextPage => tr("action.next_page"),
         MangaAction::PrevPage => tr("action.prev_page"),
         MangaAction::OneNextPage => tr("action.one_next_page"),
@@ -407,6 +409,8 @@ pub fn is_repeatable_gamepad_action(action: MangaAction) -> bool {
     matches!(
         action,
         MangaAction::NextPage
+            | MangaAction::SlideImageDown
+            | MangaAction::SlideImageUp
             | MangaAction::PrevPage
             | MangaAction::OneNextPage
             | MangaAction::OnePrevPage

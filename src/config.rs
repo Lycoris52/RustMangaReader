@@ -109,6 +109,8 @@ impl Shortcut {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum MangaAction {
     None,
+    SlideImageDown,
+    SlideImageUp,
     NextPage,
     PrevPage,
     OneNextPage,
@@ -126,8 +128,10 @@ pub enum MangaAction {
 }
 
 impl MangaAction {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::None,
+        Self::SlideImageDown,
+        Self::SlideImageUp,
         Self::NextPage,
         Self::PrevPage,
         Self::OneNextPage,
@@ -216,40 +220,70 @@ impl GamepadButton {
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(default)]
 pub struct KeyConfig {
-    pub next_page: Shortcut,
-    pub prev_page: Shortcut,
-    pub one_next_page: Shortcut,
-    pub one_prev_page: Shortcut,
-    pub first_page: Shortcut,
-    pub last_page: Shortcut,
-    pub next_file: Shortcut,
-    pub prev_file: Shortcut,
-    pub next_folder: Shortcut,
-    pub prev_folder: Shortcut,
-    pub fullscreen: Shortcut,
-    pub view_mode: Shortcut,
-    pub open_file: Shortcut,
-    pub quit_app: Shortcut,
+    #[serde(default)]
+    pub slide_image_down: Option<Shortcut>,
+    #[serde(default)]
+    pub slide_image_up: Option<Shortcut>,
+    pub next_page: Option<Shortcut>,
+    pub prev_page: Option<Shortcut>,
+    pub one_next_page: Option<Shortcut>,
+    pub one_prev_page: Option<Shortcut>,
+    pub first_page: Option<Shortcut>,
+    pub last_page: Option<Shortcut>,
+    pub next_file: Option<Shortcut>,
+    pub prev_file: Option<Shortcut>,
+    pub next_folder: Option<Shortcut>,
+    pub prev_folder: Option<Shortcut>,
+    pub fullscreen: Option<Shortcut>,
+    pub view_mode: Option<Shortcut>,
+    pub open_file: Option<Shortcut>,
+    pub quit_app: Option<Shortcut>,
 }
 
 impl Default for KeyConfig {
     fn default() -> Self {
         Self {
-            next_page: Shortcut::new(egui::Key::ArrowLeft, false, false, false),
-            prev_page: Shortcut::new(egui::Key::ArrowRight, false, false, false),
-            one_next_page: Shortcut::new(egui::Key::ArrowLeft, false, false, true),
-            one_prev_page: Shortcut::new(egui::Key::ArrowRight, false, false, true),
-            first_page: Shortcut::new(egui::Key::Home, false, false, false),
-            last_page: Shortcut::new(egui::Key::End, false, false, false),
-            next_file: Shortcut::new(egui::Key::ArrowDown, false, false, false),
-            prev_file: Shortcut::new(egui::Key::ArrowUp, false, false, false),
-            next_folder: Shortcut::new(egui::Key::ArrowLeft, true, false, false),
-            prev_folder: Shortcut::new(egui::Key::ArrowRight, true, false, false),
-            fullscreen: Shortcut::new(egui::Key::Enter, true, false, false),
-            view_mode: Shortcut::new(egui::Key::Enter, false, false, false),
-            open_file: Shortcut::new(egui::Key::O, false, false, false),
-            quit_app: Shortcut::new(egui::Key::Escape, false, false, false),
+            slide_image_down: None,
+            slide_image_up: None,
+            next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
+            prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
+            one_next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, true)),
+            one_prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, true)),
+            first_page: Some(Shortcut::new(egui::Key::Home, false, false, false)),
+            last_page: Some(Shortcut::new(egui::Key::End, false, false, false)),
+            next_file: Some(Shortcut::new(egui::Key::ArrowDown, false, false, false)),
+            prev_file: Some(Shortcut::new(egui::Key::ArrowUp, false, false, false)),
+            next_folder: Some(Shortcut::new(egui::Key::ArrowLeft, true, false, false)),
+            prev_folder: Some(Shortcut::new(egui::Key::ArrowRight, true, false, false)),
+            fullscreen: Some(Shortcut::new(egui::Key::Enter, true, false, false)),
+            view_mode: Some(Shortcut::new(egui::Key::Enter, false, false, false)),
+            open_file: Some(Shortcut::new(egui::Key::O, false, false, false)),
+            quit_app: Some(Shortcut::new(egui::Key::Escape, false, false, false)),
+        }
+    }
+}
+
+impl KeyConfig {
+    pub fn top_down_default() -> Self {
+        Self {
+            slide_image_down: Some(Shortcut::new(egui::Key::ArrowUp, false, false, false)),
+            slide_image_up: Some(Shortcut::new(egui::Key::ArrowDown, false, false, false)),
+            next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
+            prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
+            one_next_page: None,
+            one_prev_page: None,
+            first_page: Some(Shortcut::new(egui::Key::Home, false, false, false)),
+            last_page: Some(Shortcut::new(egui::Key::End, false, false, false)),
+            next_file: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
+            prev_file: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
+            next_folder: Some(Shortcut::new(egui::Key::ArrowLeft, true, false, false)),
+            prev_folder: Some(Shortcut::new(egui::Key::ArrowRight, true, false, false)),
+            fullscreen: Some(Shortcut::new(egui::Key::Enter, true, false, false)),
+            view_mode: Some(Shortcut::new(egui::Key::Enter, false, false, false)),
+            open_file: Some(Shortcut::new(egui::Key::O, false, false, false)),
+            quit_app: Some(Shortcut::new(egui::Key::Escape, false, false, false)),
         }
     }
 }
@@ -300,6 +334,16 @@ impl Default for MouseConfig {
     }
 }
 
+impl MouseConfig {
+    pub fn top_down_default() -> Self {
+        Self {
+            scroll_up: MangaAction::SlideImageUp,
+            scroll_down: MangaAction::SlideImageDown,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
 pub struct GamepadConfig {
@@ -344,12 +388,42 @@ impl Default for GamepadConfig {
     }
 }
 
+impl GamepadConfig {
+    pub fn top_down_default() -> Self {
+        Self {
+            dpad_up: MangaAction::SlideImageUp,
+            dpad_down: MangaAction::SlideImageDown,
+            ..Self::default()
+        }
+    }
+}
+
 fn default_double_click_threshold_ms() -> u64 {
     160
 }
 
 fn default_image_panel_background() -> [u8; 4] {
     [40, 40, 40, 255]
+}
+
+fn default_top_down_keys() -> KeyConfig {
+    KeyConfig::top_down_default()
+}
+
+fn default_top_down_mouse() -> MouseConfig {
+    MouseConfig::top_down_default()
+}
+
+fn default_top_down_gamepad() -> GamepadConfig {
+    GamepadConfig::top_down_default()
+}
+
+fn default_top_down_image_slide_speed() -> f32 {
+    0.05
+}
+
+fn default_top_down_image_drag_speed() -> f32 {
+    3.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -372,12 +446,24 @@ pub struct AppSettings {
     pub enable_single_file_caching: bool,
     pub image_delay: u64,
     pub keys: KeyConfig,
+    #[serde(default = "default_top_down_keys")]
+    pub top_down_keys: KeyConfig,
     #[serde(default)]
     pub mouse: MouseConfig,
+    #[serde(default = "default_top_down_mouse")]
+    pub top_down_mouse: MouseConfig,
     #[serde(default)]
     pub gamepad: GamepadConfig,
+    #[serde(default = "default_top_down_gamepad")]
+    pub top_down_gamepad: GamepadConfig,
     #[serde(default = "default_double_click_threshold_ms")]
     pub double_click_threshold_ms: u64,
+    #[serde(default = "default_double_click_threshold_ms")]
+    pub top_down_double_click_threshold_ms: u64,
+    #[serde(default = "default_top_down_image_slide_speed")]
+    pub top_down_image_slide_speed: f32,
+    #[serde(default = "default_top_down_image_drag_speed")]
+    pub top_down_image_drag_speed: f32,
     pub show_top_bar: bool,
     pub enable_auto_image_byte_fix: bool,
     pub last_page_action: LastPageAction,
@@ -399,9 +485,15 @@ impl Default for AppSettings {
             enable_single_file_caching: true,
             image_delay: 0,
             keys: KeyConfig::default(),
+            top_down_keys: KeyConfig::top_down_default(),
             mouse: MouseConfig::default(),
+            top_down_mouse: MouseConfig::top_down_default(),
             gamepad: GamepadConfig::default(),
+            top_down_gamepad: GamepadConfig::top_down_default(),
             double_click_threshold_ms: 160,
+            top_down_double_click_threshold_ms: 160,
+            top_down_image_slide_speed: default_top_down_image_slide_speed(),
+            top_down_image_drag_speed: default_top_down_image_drag_speed(),
             show_top_bar: true,
             enable_auto_image_byte_fix: true,
             last_page_action: LastPageAction::GotoNextFile,

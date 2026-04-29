@@ -34,6 +34,7 @@
   "settings.page_view.single": "単ページ",
   "settings.page_view.double_rl": "見開き (右から左)",
   "settings.page_view.double_lr": "見開き (左から右)",
+  "settings.page_view.top_down": "縦スクロール (Webマンガ)",
   "settings.last_page": "最終ページ到達時の動作:",
   "settings.last_page.next_file": "次のファイルへ移動",
   "settings.last_page.first_page": "最初のページへ戻る",

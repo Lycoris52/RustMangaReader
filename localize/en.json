@@ -34,6 +34,7 @@
   "settings.page_view.single": "Single Page",
   "settings.page_view.double_rl": "Double Page (Right to Left)",
   "settings.page_view.double_lr": "Double Page (Left to Right)",
+  "settings.page_view.top_down": "Top Down (Web Manga)",
   "settings.last_page": "Last Page Options:",
   "settings.last_page.next_file": "Go to Next File",
   "settings.last_page.first_page": "To First Page",

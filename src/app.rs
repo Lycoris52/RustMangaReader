@@ -1,13 +1,22 @@
 use crate::config::{
-    AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, LastPageAction, MangaAction,
-    MouseButton, MouseGesture, PageViewOptions, ResizeMethod, Shortcut, SourceMode, UiLanguage,
+    AppSettings, GamepadButton, ImageSizingMode, LastPageAction, MangaAction, MouseButton,
+    MouseGesture, PageViewOptions, ResizeMethod, Shortcut, SourceMode, UiLanguage,
 };
 use crate::font;
 use crate::localize::{set_language, tr};
-use crate::utils::{windows_natural_sort, windows_natural_sort_strings};
+use crate::utils::{
+    action_label, gamepad_action_for_button, gamepad_button_index, gamepad_button_label,
+    get_adjacent_directories, is_repeatable_gamepad_action, language_label, map_gamepad_button,
+    mouse_button_index, mouse_button_to_pointer, render_mouse_action_dropdown, scan_folder,
+    separator_pct, strip_adobe_app14_if_invalid, windows_natural_sort_strings,
+};
+#[path = "overlay.rs"]
+mod overlay;
+#[path = "pageview.rs"]
+mod pageview;
 use eframe::egui;
-use egui::{Align, PointerButton, Rect};
-use gilrs::{Button as GilrsButton, EventType, Gilrs};
+use egui::{Align, Rect};
+use gilrs::{EventType, Gilrs};
 use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use std::env;
@@ -131,54 +140,6 @@ impl MangaReader {
         }
     }
 
-    fn language_label(&self, language: UiLanguage) -> &str {
-        match language {
-            UiLanguage::English => tr("language.english"),
-            UiLanguage::Japanese => tr("language.japanese"),
-        }
-    }
-
-    fn action_label(&self, action: MangaAction) -> &str {
-        match action {
-            MangaAction::None => tr("action.none"),
-            MangaAction::NextPage => tr("action.next_page"),
-            MangaAction::PrevPage => tr("action.prev_page"),
-            MangaAction::OneNextPage => tr("action.one_next_page"),
-            MangaAction::OnePrevPage => tr("action.one_prev_page"),
-            MangaAction::FirstPage => tr("action.first_page"),
-            MangaAction::LastPage => tr("action.last_page"),
-            MangaAction::NextFile => tr("action.next_file"),
-            MangaAction::PrevFile => tr("action.prev_file"),
-            MangaAction::NextFolder => tr("action.next_folder"),
-            MangaAction::PrevFolder => tr("action.prev_folder"),
-            MangaAction::FullScreen => tr("action.fullscreen"),
-            MangaAction::ViewMode => tr("action.view_mode"),
-            MangaAction::OpenFile => tr("action.open_file"),
-            MangaAction::QuitApp => tr("action.quit_app"),
-        }
-    }
-
-    fn gamepad_button_label(&self, button: GamepadButton) -> &'static str {
-        match button {
-            GamepadButton::South => tr("settings.gamepad.south"),
-            GamepadButton::East => tr("settings.gamepad.east"),
-            GamepadButton::North => tr("settings.gamepad.north"),
-            GamepadButton::West => tr("settings.gamepad.west"),
-            GamepadButton::LeftTrigger => tr("settings.gamepad.left_trigger"),
-            GamepadButton::LeftTrigger2 => tr("settings.gamepad.left_trigger2"),
-            GamepadButton::RightTrigger => tr("settings.gamepad.right_trigger"),
-            GamepadButton::RightTrigger2 => tr("settings.gamepad.right_trigger2"),
-            GamepadButton::Select => tr("settings.gamepad.select"),
-            GamepadButton::Start => tr("settings.gamepad.start"),
-            GamepadButton::LeftThumb => tr("settings.gamepad.left_thumb"),
-            GamepadButton::RightThumb => tr("settings.gamepad.right_thumb"),
-            GamepadButton::DPadUp => tr("settings.gamepad.dpad_up"),
-            GamepadButton::DPadDown => tr("settings.gamepad.dpad_down"),
-            GamepadButton::DPadLeft => tr("settings.gamepad.dpad_left"),
-            GamepadButton::DPadRight => tr("settings.gamepad.dpad_right"),
-        }
-    }
-
     fn open_file_dialog(&mut self) {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_dialog_time) > std::time::Duration::from_millis(500) {
@@ -258,93 +219,6 @@ impl MangaReader {
                 .as_ref()
                 .map(|tex| self.image_draw_size(tex, page_size, self.zoom_factor))
                 .is_some_and(|size| size.x > page_size.x || size.y > page_size.y)
-    }
-
-    fn scan_folder(&mut self, current_parent: &Path) -> Vec<PathBuf> {
-        let mut items = Vec::new();
-        if let Ok(entries) = fs::read_dir(current_parent) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_zip = path.extension().map_or(false, |ext| {
-                    ext == "zip" || ext == "pdf" || ext == "cbz" || ext == "cbr" || ext == "rar"
-                });
-                // Treat non-hidden directories as readable manga sources
-                let is_dir = path.is_dir()
-                    && !path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .starts_with('.');
-
-                if is_zip || is_dir {
-                    items.push(path);
-                }
-            }
-        }
-        windows_natural_sort(&mut items);
-        items
-    }
-
-    fn get_adjacent_directories(
-        path_with_file_name: Option<PathBuf>,
-    ) -> (Option<PathBuf>, Option<PathBuf>) {
-        // Unwrap the Option to get the actual PathBuf
-        let path = match path_with_file_name {
-            Some(p) => p,
-            None => return (None, None),
-        };
-
-        let path = match path.parent() {
-            Some(p) => p,
-            None => return (None, None),
-        };
-
-        let root_dir = match path.parent() {
-            Some(p) => p,
-            None => return (None, None),
-        };
-
-        // Collect all valid sibling directories
-        let mut dirs: Vec<PathBuf> = fs::read_dir(root_dir)
-            .ok()
-            .map(|read_dir| {
-                read_dir
-                    .filter_map(|entry| {
-                        let p = entry.ok()?.path();
-                        // Ensure it's a directory and not a hidden file
-                        if p.is_dir() && !p.file_name()?.to_str()?.starts_with('.') {
-                            Some(p)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Sort using Windows natural alphanumeric order (test2 before test10)
-        // If you haven't added a crate, dirs.sort() works for simple cases
-        windows_natural_sort(&mut *dirs);
-
-        // Find where we are
-        let current_pos = dirs.iter().position(|p| *p == path);
-
-        match current_pos {
-            Some(pos) => {
-                let prev = if pos > 0 {
-                    Some(dirs[pos - 1].clone())
-                } else {
-                    None
-                };
-                let next = if pos + 1 < dirs.len() {
-                    Some(dirs[pos + 1].clone())
-                } else {
-                    None
-                };
-                (prev, next)
-            }
-            None => (None, None),
-        }
     }
 
     fn update_buffers(&mut self, ctx: &egui::Context) {
@@ -473,7 +347,7 @@ impl MangaReader {
 
                     if let Some(mut buffer) = bytes {
                         if self.config.enable_auto_image_byte_fix {
-                            buffer = self.strip_adobe_app14_if_invalid(&buffer);
+                            buffer = strip_adobe_app14_if_invalid(&buffer);
                         }
                         match image::guess_format(&buffer) {
                             Ok(format) => {
@@ -498,73 +372,6 @@ impl MangaReader {
             }
         }
         pair
-    }
-
-    fn strip_adobe_app14_if_invalid(&self, bytes: &[u8]) -> Vec<u8> {
-        let mut i = 2;
-        let mut out = Vec::with_capacity(bytes.len());
-
-        // Copy SOI first (must be first two bytes)
-        if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
-            return bytes.to_vec(); // not a valid jpeg
-        }
-
-        out.extend_from_slice(&bytes[0..2]);
-
-        while i < bytes.len() {
-            if i + 1 >= bytes.len() {
-                break;
-            }
-
-            // Every marker must start with FF
-            if bytes[i] != 0xFF {
-                // Start of entropy data (after SOS)
-                out.extend_from_slice(&bytes[i..]);
-                break;
-            }
-
-            let marker = bytes[i + 1];
-
-            // Standalone markers (no length)
-            if marker == 0xD9 || (0xD0..=0xD7).contains(&marker) {
-                out.push(0xFF);
-                out.push(marker);
-                i += 2;
-                continue;
-            }
-
-            // SOS marker copy rest of file and stop parsing
-            if marker == 0xDA {
-                out.extend_from_slice(&bytes[i..]);
-                break;
-            }
-
-            if i + 4 > bytes.len() {
-                break;
-            }
-
-            let length = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
-
-            let segment_end = i + 2 + length;
-
-            if segment_end > bytes.len() {
-                break;
-            }
-
-            // If APP14 (FF EE)
-            if marker == 0xEE && length >= 14 && &bytes[i + 4..i + 9] == b"Adobe" {
-                println!("Stripping Adobe APP14 segment");
-                // Skip this segment entirely
-                i = segment_end;
-                continue;
-            }
-
-            // Otherwise copy full segment
-            out.extend_from_slice(&bytes[i..segment_end]);
-            i = segment_end;
-        }
-
-        out
     }
 
     /// Helper to render a specific page
@@ -781,8 +588,7 @@ impl MangaReader {
             self.image_files = images;
 
             // Scan parent for Next/Prev file navigation
-            self.all_zips_in_folder =
-                self.scan_folder(&target_path.parent().unwrap_or(Path::new("")));
+            self.all_zips_in_folder = scan_folder(&target_path.parent().unwrap_or(Path::new("")));
 
             if let Some(file_name) = target_path.file_name() {
                 self.zip_name_display =
@@ -926,11 +732,11 @@ impl MangaReader {
     }
 
     fn next_folder(&mut self, ctx: &egui::Context) {
-        let (_, next_dir) = Self::get_adjacent_directories(self.zip_path.clone());
+        let (_, next_dir) = get_adjacent_directories(self.zip_path.clone());
 
         // Check if next_dir actually exists
         if let Some(dir) = next_dir {
-            let zips = self.scan_folder(&*dir);
+            let zips = scan_folder(&*dir);
             if zips.is_empty() {
                 let msg = tr("error.no_archive_next_folder").to_owned();
                 self.show_fading_error(&msg);
@@ -944,11 +750,11 @@ impl MangaReader {
     }
 
     fn prev_folder(&mut self, ctx: &egui::Context) {
-        let (prev_dir, _) = Self::get_adjacent_directories(self.zip_path.clone());
+        let (prev_dir, _) = get_adjacent_directories(self.zip_path.clone());
 
         // Check if next_dir actually exists
         if let Some(dir) = prev_dir {
-            let zips = self.scan_folder(&*dir);
+            let zips = scan_folder(&*dir);
             if zips.is_empty() {
                 let msg = tr("error.no_archive_prev_folder").to_owned();
                 self.show_fading_error(&msg);
@@ -988,26 +794,6 @@ impl MangaReader {
         self.buffer_next = [None, None];
     }
 
-    fn mouse_button_to_pointer(button: MouseButton) -> PointerButton {
-        match button {
-            MouseButton::Button1 => PointerButton::Primary,
-            MouseButton::Button2 => PointerButton::Secondary,
-            MouseButton::Button3 => PointerButton::Middle,
-            MouseButton::Button4 => PointerButton::Extra1,
-            MouseButton::Button5 => PointerButton::Extra2,
-        }
-    }
-
-    fn mouse_button_index(button: MouseButton) -> usize {
-        match button {
-            MouseButton::Button1 => 0,
-            MouseButton::Button2 => 1,
-            MouseButton::Button3 => 2,
-            MouseButton::Button4 => 3,
-            MouseButton::Button5 => 4,
-        }
-    }
-
     fn get_mouse_action(&self, gesture: MouseGesture) -> MangaAction {
         match gesture {
             MouseGesture::Unassigned => MangaAction::None,
@@ -1041,84 +827,6 @@ impl MangaReader {
         }
     }
 
-    fn map_gamepad_button(button: GilrsButton) -> Option<GamepadButton> {
-        match button {
-            GilrsButton::South => Some(GamepadButton::South),
-            GilrsButton::East => Some(GamepadButton::East),
-            GilrsButton::North => Some(GamepadButton::North),
-            GilrsButton::West => Some(GamepadButton::West),
-            GilrsButton::LeftTrigger => Some(GamepadButton::LeftTrigger),
-            GilrsButton::LeftTrigger2 => Some(GamepadButton::LeftTrigger2),
-            GilrsButton::RightTrigger => Some(GamepadButton::RightTrigger),
-            GilrsButton::RightTrigger2 => Some(GamepadButton::RightTrigger2),
-            GilrsButton::Select => Some(GamepadButton::Select),
-            GilrsButton::Start => Some(GamepadButton::Start),
-            GilrsButton::LeftThumb => Some(GamepadButton::LeftThumb),
-            GilrsButton::RightThumb => Some(GamepadButton::RightThumb),
-            GilrsButton::DPadUp => Some(GamepadButton::DPadUp),
-            GilrsButton::DPadDown => Some(GamepadButton::DPadDown),
-            GilrsButton::DPadLeft => Some(GamepadButton::DPadLeft),
-            GilrsButton::DPadRight => Some(GamepadButton::DPadRight),
-            _ => None,
-        }
-    }
-
-    fn gamepad_button_index(button: GamepadButton) -> usize {
-        match button {
-            GamepadButton::South => 0,
-            GamepadButton::East => 1,
-            GamepadButton::North => 2,
-            GamepadButton::West => 3,
-            GamepadButton::LeftTrigger => 4,
-            GamepadButton::LeftTrigger2 => 5,
-            GamepadButton::RightTrigger => 6,
-            GamepadButton::RightTrigger2 => 7,
-            GamepadButton::Select => 8,
-            GamepadButton::Start => 9,
-            GamepadButton::LeftThumb => 10,
-            GamepadButton::RightThumb => 11,
-            GamepadButton::DPadUp => 12,
-            GamepadButton::DPadDown => 13,
-            GamepadButton::DPadLeft => 14,
-            GamepadButton::DPadRight => 15,
-        }
-    }
-
-    fn gamepad_action_for_button(config: GamepadConfig, button: GamepadButton) -> MangaAction {
-        match button {
-            GamepadButton::South => config.south,
-            GamepadButton::East => config.east,
-            GamepadButton::North => config.north,
-            GamepadButton::West => config.west,
-            GamepadButton::LeftTrigger => config.left_trigger,
-            GamepadButton::LeftTrigger2 => config.left_trigger2,
-            GamepadButton::RightTrigger => config.right_trigger,
-            GamepadButton::RightTrigger2 => config.right_trigger2,
-            GamepadButton::Select => config.select,
-            GamepadButton::Start => config.start,
-            GamepadButton::LeftThumb => config.left_thumb,
-            GamepadButton::RightThumb => config.right_thumb,
-            GamepadButton::DPadUp => config.dpad_up,
-            GamepadButton::DPadDown => config.dpad_down,
-            GamepadButton::DPadLeft => config.dpad_left,
-            GamepadButton::DPadRight => config.dpad_right,
-        }
-    }
-
-    fn is_repeatable_gamepad_action(action: MangaAction) -> bool {
-        matches!(
-            action,
-            MangaAction::NextPage
-                | MangaAction::PrevPage
-                | MangaAction::OneNextPage
-                | MangaAction::OnePrevPage
-                | MangaAction::NextFile
-                | MangaAction::PrevFile
-                | MangaAction::NextFolder
-                | MangaAction::PrevFolder
-        )
-    }
-
     fn gamepad_repeat_interval(&self) -> Duration {
         Duration::from_millis(self.config.image_delay.max(80))
     }
@@ -1133,10 +841,10 @@ impl MangaReader {
         while let Some(event) = gilrs.next_event() {
             match event.event {
                 EventType::ButtonPressed(button, _) => {
-                    if let Some(mapped_button) = Self::map_gamepad_button(button) {
-                        let action = Self::gamepad_action_for_button(gamepad_config, mapped_button);
-                        let index = Self::gamepad_button_index(mapped_button);
-                        if Self::is_repeatable_gamepad_action(action) {
+                    if let Some(mapped_button) = map_gamepad_button(button) {
+                        let action = gamepad_action_for_button(gamepad_config, mapped_button);
+                        let index = gamepad_button_index(mapped_button);
+                        if is_repeatable_gamepad_action(action) {
                             self.gamepad_repeat_deadlines[index] =
                                 Some(now + GAMEPAD_INITIAL_REPEAT_DELAY);
                             ctx.request_repaint_after(GAMEPAD_INITIAL_REPEAT_DELAY);
@@ -1149,8 +857,8 @@ impl MangaReader {
                     }
                 }
                 EventType::ButtonReleased(button, _) => {
-                    if let Some(mapped_button) = Self::map_gamepad_button(button) {
-                        let index = Self::gamepad_button_index(mapped_button);
+                    if let Some(mapped_button) = map_gamepad_button(button) {
+                        let index = gamepad_button_index(mapped_button);
                         self.gamepad_repeat_deadlines[index] = None;
                     }
                 }
@@ -1160,11 +868,11 @@ impl MangaReader {
 
         let now = Instant::now();
         for button in GamepadButton::ALL {
-            let index = Self::gamepad_button_index(button);
+            let index = gamepad_button_index(button);
             if let Some(deadline) = self.gamepad_repeat_deadlines[index] {
                 if now >= deadline {
-                    let action = Self::gamepad_action_for_button(gamepad_config, button);
-                    if Self::is_repeatable_gamepad_action(action) {
+                    let action = gamepad_action_for_button(gamepad_config, button);
+                    if is_repeatable_gamepad_action(action) {
                         self.gamepad_repeat_deadlines[index] = Some(now + repeat_interval);
                         ctx.request_repaint_after(repeat_interval);
                         if action != MangaAction::None {
@@ -1225,8 +933,8 @@ impl MangaReader {
 
         if !response.hovered() {
             for button in MouseButton::ALL {
-                let index = Self::mouse_button_index(button);
-                if !ctx.input(|i| i.pointer.button_down(Self::mouse_button_to_pointer(button))) {
+                let index = mouse_button_index(button);
+                if !ctx.input(|i| i.pointer.button_down(mouse_button_to_pointer(button))) {
                     self.mouse_press_started[index] = None;
                     self.mouse_press_origin[index] = None;
                     self.mouse_long_triggered[index] = false;
@@ -1237,16 +945,15 @@ impl MangaReader {
         }
 
         for button in MouseButton::ALL {
-            let pointer_button = Self::mouse_button_to_pointer(button);
-            let button_index = Self::mouse_button_index(button);
+            let pointer_button = mouse_button_to_pointer(button);
+            let button_index = mouse_button_index(button);
             let now = Instant::now();
             let is_down = ctx.input(|i| i.pointer.button_down(pointer_button));
 
             if is_down {
                 if self.mouse_press_started[button_index].is_none() {
                     self.mouse_press_started[button_index] = Some(now);
-                    self.mouse_press_origin[button_index] =
-                        ctx.input(|i| i.pointer.interact_pos());
+                    self.mouse_press_origin[button_index] = ctx.input(|i| i.pointer.interact_pos());
                     self.mouse_long_triggered[button_index] = false;
                     self.mouse_drag_suppressed[button_index] = false;
                     ctx.request_repaint();
@@ -1647,10 +1354,10 @@ impl eframe::App for MangaReader {
                                 ui.label(egui::RichText::new(tr("language.label")).size(20.0).strong());
                                 separator_pct(ui);
                                 let mut language_changed = false;
-                                let english_label = self.language_label(UiLanguage::English).to_owned();
-                                let japanese_label = self.language_label(UiLanguage::Japanese).to_owned();
+                                let english_label = language_label(UiLanguage::English).to_owned();
+                                let japanese_label = language_label(UiLanguage::Japanese).to_owned();
                                 egui::ComboBox::from_id_salt("language_select")
-                                    .selected_text(self.language_label(self.config.language))
+                                    .selected_text(language_label(self.config.language))
                                     .show_ui(ui, |ui| {
                                         language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::English, &english_label).changed();
                                         language_changed |= ui.selectable_value(&mut self.config.language, UiLanguage::Japanese, &japanese_label).changed();
@@ -1692,6 +1399,7 @@ impl eframe::App for MangaReader {
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::Single, egui::RichText::new(tr("settings.page_view.single"))).clicked();
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleRL, egui::RichText::new(tr("settings.page_view.double_rl"))).clicked();
                                     changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::DoubleLR, egui::RichText::new(tr("settings.page_view.double_lr"))).clicked();
+                                    changed |= ui.radio_value(&mut self.config.page_view_options, PageViewOptions::TopDown, egui::RichText::new(tr("settings.page_view.top_down"))).clicked();
                                     separator_pct(ui);
                                     ui.label(egui::RichText::new(tr("settings.page_view.center_offset")).size(20.0).strong());
                                     let slider_width = ui.available_width() * 0.98;
@@ -1902,7 +1610,7 @@ impl eframe::App for MangaReader {
                                         ui.add_space(10.0);
                                         let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
                                             .into_iter()
-                                            .map(|action| (action, self.action_label(action).to_owned()))
+                                            .map(|action| (action, action_label(action).to_owned()))
                                             .collect();
                                         let unassigned_label = tr("common.unassigned").to_owned();
                                         egui::Grid::new("mouse_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
@@ -1974,12 +1682,12 @@ impl eframe::App for MangaReader {
                                         let mut gamepad_changed = false;
                                         let action_options: Vec<(MangaAction, String)> = MangaAction::ALL
                                             .into_iter()
-                                            .map(|action| (action, self.action_label(action).to_owned()))
+                                            .map(|action| (action, action_label(action).to_owned()))
                                             .collect();
                                         let unassigned_label = tr("common.unassigned").to_owned();
                                         egui::Grid::new("gamepad_grid").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
                                             for button in GamepadButton::ALL {
-                                                ui.label(self.gamepad_button_label(button));
+                                                ui.label(gamepad_button_label(button));
                                                 let action = match button {
                                                     GamepadButton::South => &mut self.config.gamepad.south,
                                                     GamepadButton::East => &mut self.config.gamepad.east,
@@ -2019,28 +1727,6 @@ impl eframe::App for MangaReader {
 
 
                     });
-                    fn separator_pct(ui: &mut egui::Ui) {
-                        let pct = 0.9;
-
-                        let spacing = ui.spacing();
-                        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-
-                        // Allocate a thin horizontal area (like separator does)
-                        let desired_h = spacing.scroll.bar_width; // this is usually ~1.0
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), desired_h), egui::Sense::hover());
-
-                        // Compute a centered line that's pct of the available width
-                        let full_w = rect.width();
-                        let line_w = full_w * pct;
-
-                        let indent = 0.0;
-                        let x0 = rect.left() + indent;
-                        let x1 = (x0 + line_w).min(rect.right());
-                        let y  = rect.center().y;
-
-                        ui.painter().line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
-                    }
-
                     // Helper function to keep the UI code clean
                     fn render_binding_button(ui: &mut egui::Ui, id: &str, shortcut: &mut Shortcut, binding: &mut Option<BindingTarget>, listening_text: &str) {
                         let is_binding = matches!(binding, Some(BindingTarget::Keyboard(action)) if action == id);
@@ -2051,24 +1737,6 @@ impl eframe::App for MangaReader {
                         }
                     }
 
-                    fn render_mouse_action_dropdown(ui: &mut egui::Ui, id: &str, action: &mut MangaAction, action_options: &[(MangaAction, String)], unassigned_label: &str) -> bool {
-                        let previous = *action;
-                        egui::ComboBox::from_id_salt(id)
-                            .selected_text(action_options.iter().find(|(option, _)| option == action).map(|(_, label)| label.as_str()).unwrap_or(unassigned_label))
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                for (option, label) in action_options {
-                                    ui.selectable_value(action, *option, label);
-                                }
-                            });
-
-                        if *action != previous {
-                            ui.ctx().request_repaint();
-                            true
-                        } else {
-                            false
-                        }
-                    }
                 });
         }
 
@@ -2280,430 +1948,7 @@ impl eframe::App for MangaReader {
                 });
         }
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(self.image_panel_background_color()))
-            .show(ctx, |ui| {
-                let rect = ui.available_rect_before_wrap();
-
-                // Create a 'Response' for the entire background area first,
-                // but we check it at the END of the code.
-                let bg_response = ui.interact(rect, ui.id().with("bg"), egui::Sense::hover());
-
-                if self.zip_path.is_some() {
-                    // Show single image on center or if in shifted cover mode
-                    let is_zoomed = (self.zoom_factor - 1.0).abs() > 0.01;
-                    let double_needs_drag = self.double_page_needs_drag(rect);
-                    let viewing_single = self.is_single_page()
-                        || (self.is_shifted && self.current_index == 0);
-                    let single_image_size = self.textures[0]
-                        .as_ref()
-                        .map(|tex| self.image_draw_size(tex, rect.size(), self.zoom_factor))
-                        .unwrap_or(egui::Vec2::ZERO);
-                    let single_needs_drag = single_image_size.x > rect.width()
-                        || single_image_size.y > rect.height();
-
-                    if viewing_single && !single_needs_drag {
-                        let single_response =
-                            ui.interact(rect, ui.id().with("single_click"), egui::Sense::click());
-                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
-                            if let Some(mouse_action) =
-                                self.collect_mouse_action(&single_response, ctx)
-                            {
-                                action_to_run = mouse_action;
-                            }
-                        }
-                        if let Some(tex) = &self.textures[0] {
-                            ui.painter().image(
-                                tex.id(),
-                                egui::Rect::from_center_size(rect.center(), single_image_size),
-                                egui::Rect::from_min_max(
-                                    egui::Pos2::ZERO,
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                    } else if viewing_single {
-                        let pan_response =
-                            ui.interact(rect, ui.id().with("single_pan"), egui::Sense::click_and_drag());
-                        if pan_response.dragged() {
-                            self.pan_offset += ctx.input(|i| i.pointer.delta());
-                            ctx.request_repaint();
-                        }
-                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
-                            if let Some(mouse_action) = self.collect_mouse_action(&pan_response, ctx)
-                            {
-                                action_to_run = mouse_action;
-                            }
-                        }
-                        if let Some(tex) = &self.textures[0] {
-                            ui.painter().image(
-                                tex.id(),
-                                egui::Rect::from_center_size(
-                                    rect.center() + self.pan_offset,
-                                    single_image_size,
-                                ),
-                                egui::Rect::from_min_max(
-                                    egui::Pos2::ZERO,
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                    } else if is_zoomed || double_needs_drag {
-                        let pan_response =
-                            ui.interact(rect, ui.id().with("spread_pan"), egui::Sense::click_and_drag());
-                        if pan_response.dragged() {
-                            self.pan_offset += ctx.input(|i| i.pointer.delta());
-                            ctx.request_repaint();
-                        }
-                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
-                            if let Some(mouse_action) = self.collect_mouse_action(&pan_response, ctx)
-                            {
-                                action_to_run = mouse_action;
-                            }
-                        }
-                        let page_container_size = egui::vec2(
-                            (rect.width() * 0.5 - self.config.spread_center_offset.abs())
-                                .max(1.0),
-                            rect.height(),
-                        );
-                        let left_size = self.textures[1]
-                            .as_ref()
-                            .map(|tex| {
-                                self.image_draw_size(tex, page_container_size, self.zoom_factor)
-                            })
-                            .unwrap_or(egui::Vec2::ZERO);
-                        let right_size = self.textures[0]
-                            .as_ref()
-                            .map(|tex| {
-                                self.image_draw_size(tex, page_container_size, self.zoom_factor)
-                            })
-                            .unwrap_or(egui::Vec2::ZERO);
-
-                        let center_axis = rect.center().x + self.pan_offset.x;
-                        let offset = self.config.spread_center_offset;
-                        let top_y =
-                            rect.center().y - left_size.y.max(right_size.y) * 0.5 + self.pan_offset.y;
-                        let (visual_left_size, _) =
-                            if self.config.page_view_options == PageViewOptions::DoubleLR {
-                                (right_size, left_size)
-                            } else {
-                                (left_size, right_size)
-                            };
-                        let visual_left_x = center_axis - offset - visual_left_size.x;
-                        let visual_right_x = center_axis + offset;
-                        let clip_axis = center_axis.clamp(rect.min.x, rect.max.x);
-                        let left_visible_rect = egui::Rect::from_min_max(
-                            rect.min,
-                            egui::pos2(clip_axis, rect.max.y),
-                        );
-                        let right_visible_rect = egui::Rect::from_min_max(
-                            egui::pos2(clip_axis, rect.min.y),
-                            rect.max,
-                        );
-
-                        if self.config.page_view_options == PageViewOptions::DoubleLR {
-                            if let Some(tex) = &self.textures[0] {
-                                self.paint_image_clipped(
-                                    ui,
-                                    tex,
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(visual_left_x, top_y),
-                                        right_size,
-                                    ),
-                                    left_visible_rect,
-                                );
-                            }
-                            if let Some(tex) = &self.textures[1] {
-                                self.paint_image_clipped(
-                                    ui,
-                                    tex,
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(visual_right_x, top_y),
-                                        left_size,
-                                    ),
-                                    right_visible_rect,
-                                );
-                            }
-                        } else {
-                            if let Some(tex) = &self.textures[1] {
-                                self.paint_image_clipped(
-                                    ui,
-                                    tex,
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(visual_left_x, top_y),
-                                        left_size,
-                                    ),
-                                    left_visible_rect,
-                                );
-                            }
-                            if let Some(tex) = &self.textures[0] {
-                                self.paint_image_clipped(
-                                    ui,
-                                    tex,
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(visual_right_x, top_y),
-                                        right_size,
-                                    ),
-                                    right_visible_rect,
-                                );
-                            }
-                        }
-
-                    } else {
-                        let center = rect.center().x;
-                        let mut left_half = egui::Rect::from_min_max(
-                            rect.min,
-                            egui::pos2(center - self.config.spread_center_offset, rect.max.y),
-                        );
-                        let mut right_half = egui::Rect::from_min_max(
-                            egui::pos2(center + self.config.spread_center_offset, rect.min.y),
-                            rect.max,
-                        );
-                        let mut align_for_left_side: Align = egui::Align::RIGHT;
-                        let mut align_for_right_side: Align = egui::Align::LEFT;
-                        if self.config.page_view_options == PageViewOptions::DoubleLR {
-                            std::mem::swap(&mut left_half, &mut right_half);
-                            align_for_left_side = egui::Align::LEFT;
-                            align_for_right_side = egui::Align::RIGHT;
-                        }
-
-                        let left_visible_half =
-                            egui::Rect::from_min_max(rect.min, egui::pos2(center, rect.max.y));
-                        let right_visible_half =
-                            egui::Rect::from_min_max(egui::pos2(center, rect.min.y), rect.max);
-                        let left_visible_rect = if left_half.center().x <= center {
-                            left_visible_half
-                        } else {
-                            right_visible_half
-                        };
-                        let right_visible_rect = if right_half.center().x <= center {
-                            left_visible_half
-                        } else {
-                            right_visible_half
-                        };
-                        let left_image_size = self.textures[1]
-                            .as_ref()
-                            .map(|tex| self.image_draw_size(tex, left_half.size(), 1.0))
-                            .unwrap_or(egui::Vec2::ZERO);
-                        let right_image_size = self.textures[0]
-                            .as_ref()
-                            .map(|tex| self.image_draw_size(tex, right_half.size(), 1.0))
-                            .unwrap_or(egui::Vec2::ZERO);
-
-                        let left_response = self.create_image_rect(
-                            ui,
-                            left_half,
-                            left_visible_rect,
-                            "left_hit",
-                            1,
-                            align_for_left_side,
-                            left_image_size,
-                        );
-                        let right_response = self.create_image_rect(
-                            ui,
-                            right_half,
-                            right_visible_rect,
-                            "right_hit",
-                            0,
-                            align_for_right_side,
-                            right_image_size,
-                        );
-                        if self.binding_action.is_none() && action_to_run == MangaAction::None {
-                            if let Some(mouse_action) =
-                                self.collect_mouse_action(&left_response, ctx)
-                            {
-                                action_to_run = mouse_action;
-                            } else if let Some(mouse_action) =
-                                self.collect_mouse_action(&right_response, ctx)
-                            {
-                                action_to_run = mouse_action;
-                            }
-                        }
-
-                        // ONLY TRIGGER IF BACKGROUND WAS CLICKED
-                        // bg_response.clicked() is true if the background was clicked.
-                        // However, we only want to trigger if a specific image wasn't the target.
-                        if bg_response.clicked()
-                            && !ctx.is_using_pointer()
-                            && !ctx.input(|i| i.pointer.any_down())
-                        {
-                            // Extra safety: check if we are actually hovering an image
-                            if !left_visible_rect
-                                .contains(ctx.pointer_interact_pos().unwrap_or_default())
-                                && !right_visible_rect
-                                    .contains(ctx.pointer_interact_pos().unwrap_or_default())
-                            {
-                                self.open_file_dialog();
-                            }
-                        }
-                    }
-                } else {
-                    // the start screen
-                    ui.centered_and_justified(|ui| {
-                        let start_btn = egui::Button::new(
-                            egui::RichText::new(tr("start.open_zip"))
-                                .size(20.0)
-                                .color(egui::Color32::from_gray(200)),
-                        )
-                        .fill(egui::Color32::from_gray(40));
-                        if ui.add_sized(ctx.content_rect().size(), start_btn).clicked() {
-                            self.open_file_dialog();
-                        }
-                    });
-                }
-
-                // --- THE BACKGROUND CLICK CHECK (When Zip is Open) ---
-                if self.zip_path.is_some() && bg_response.clicked() {
-                    // Check if the click was actually handled by an image
-                    if !ctx.is_using_pointer() {
-                        // Check coordinates to ensure we aren't inside the "reading zones"
-                        let left_half = egui::Rect::from_min_max(
-                            rect.min,
-                            egui::pos2(rect.center().x, rect.max.y),
-                        );
-                        let right_half = egui::Rect::from_min_max(
-                            egui::pos2(rect.center().x, rect.min.y),
-                            rect.max,
-                        );
-
-                        let pointer_pos =
-                            ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
-
-                        if !left_half.contains(pointer_pos) && !right_half.contains(pointer_pos) {
-                            self.open_file_dialog();
-                        }
-                    }
-                }
-
-                // Error Overlay Logic (Fading)
-                if let Some((msg, start_time)) = &self.error_msg {
-                    let elapsed = start_time.elapsed().as_secs_f32();
-                    if elapsed < 2.0 {
-                        let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
-                        let padding = if self.config.show_settings {
-                            -(self.config.settings_width / 2.0)
-                        } else {
-                            0.0
-                        };
-                        egui::Window::new("")
-                            .anchor(egui::Align2::CENTER_TOP, [padding, 20.0]) // Positioned at top center
-                            .frame(
-                                egui::Frame::window(&ui.style())
-                                    .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        egui::Color32::from_white_alpha((50.0 * opacity) as u8),
-                                    )),
-                            )
-                            .title_bar(false)
-                            .show(ctx, |ui| {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .color(egui::Color32::from_white_alpha(
-                                            (255.0 * opacity) as u8,
-                                        ))
-                                        .size(24.0)
-                                        .strong(),
-                                );
-                            });
-                        ctx.request_repaint();
-                    } else {
-                        self.error_msg = None;
-                    }
-                }
-
-                // --- ZIP FILENAME OVERLAY (Center-Top) ---
-                if let Some((name, start_time)) = &self.zip_name_display {
-                    let elapsed = start_time.elapsed().as_secs_f32();
-
-                    if elapsed < 2.0 {
-                        let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
-                        let padding = if self.config.show_settings {
-                            -(self.config.settings_width / 2.0)
-                        } else {
-                            0.0
-                        };
-                        egui::Window::new("zip_name_overlay")
-                            .anchor(egui::Align2::CENTER_TOP, [padding, 80.0]) // Positioned at top center
-                            .frame(
-                                egui::Frame::window(&ui.style())
-                                    .fill(egui::Color32::from_black_alpha((180.0 * opacity) as u8))
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        egui::Color32::from_white_alpha((50.0 * opacity) as u8),
-                                    )),
-                            )
-                            .title_bar(false)
-                            .resizable(false)
-                            .show(ctx, |ui| {
-                                ui.label(
-                                    egui::RichText::new(name)
-                                        .color(egui::Color32::from_white_alpha(
-                                            (255.0 * opacity) as u8,
-                                        ))
-                                        .size(24.0)
-                                        .strong(),
-                                );
-                            });
-                        ctx.request_repaint(); // Keep the animation smooth
-                    } else {
-                        self.zip_name_display = None;
-                    }
-                }
-
-                // --- THE PAGE INDICATOR OVERLAY (Large & Single Line) ---
-                if let Some(start_time) = self.page_indicator_time {
-                    let elapsed = start_time.elapsed().as_secs_f32();
-                    if elapsed < 2.0 {
-                        let opacity = (1.0 - (elapsed / 2.0)).clamp(0.0, 1.0);
-                        let padding = if self.config.show_settings {
-                            -30.0 - self.config.settings_width
-                        } else {
-                            -15.0
-                        };
-                        egui::Window::new("page_info")
-                            .anchor(egui::Align2::RIGHT_TOP, [padding, 10.0])
-                            .frame(
-                                egui::Frame::NONE
-                                    .fill(egui::Color32::from_rgba_unmultiplied(
-                                        60,
-                                        60,
-                                        60,
-                                        (opacity * 255.0) as u8,
-                                    ))
-                                    .inner_margin(5.0)
-                                    .corner_radius(5.0),
-                            ) // No background box
-                            .title_bar(false)
-                            .resizable(false)
-                            .collapsible(false)
-                            .fixed_size([300.0, 60.0]) // Force a wide area to prevent wrapping
-                            .show(ctx, |ui| {
-                                // Ensure text stays on one line
-                                ui.horizontal(|ui| {
-                                    let page_text = format!(
-                                        "{} / {}",
-                                        self.current_index + 1,
-                                        self.image_files.len()
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(page_text)
-                                            .color(egui::Color32::from_white_alpha(
-                                                (200.0 * opacity) as u8,
-                                            ))
-                                            .size(22.0) // Much larger font
-                                            .strong(),
-                                    );
-                                });
-                            });
-                        ctx.request_repaint();
-                    } else {
-                        self.page_indicator_time = None;
-                    }
-                }
-            });
+        self.render_page_view(ctx, &mut action_to_run);
 
         if action_to_run != MangaAction::None {
             self.execute_action(action_to_run, ctx);

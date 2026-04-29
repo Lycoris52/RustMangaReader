@@ -13,6 +13,7 @@ pub enum PageViewOptions {
     Single,   // single page
     DoubleRL, // double page from right to left
     DoubleLR, // double page from left to right
+    TopDown,  // vertical web manga view
 }
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]

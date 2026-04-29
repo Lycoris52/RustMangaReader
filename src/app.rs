@@ -1810,6 +1810,16 @@ impl eframe::App for MangaReader {
                                     }
                                 });
                                 ui.checkbox(&mut self.config.show_top_bar, tr("settings.show_toolbar"));
+                                // setting for auto hide the setting button
+                                if ui
+                                    .checkbox(
+                                        &mut self.config.auto_hide_settings_button,
+                                        tr("settings.auto_hide_settings_button"),
+                                    )
+                                    .changed()
+                                {
+                                    self.save_settings();
+                                }
                                 ui.checkbox(&mut self.config.transparency_support, tr("settings.transparency"))
                                     .on_hover_text(tr("settings.transparency.tooltip"));
                                 ui.checkbox(&mut self.config.enable_auto_image_byte_fix, tr("settings.auto_image_fix"))
@@ -2076,21 +2086,37 @@ impl eframe::App for MangaReader {
         // Calculate Y position to center the 200px button vertically
         let y_pos = screen_rect.center().y - (button_height / 2.0);
 
-        egui::Area::new(egui::Id::new("settings_toggle"))
-            .fixed_pos([x_pos, y_pos])
-            .show(ctx, |ui| {
-                let text = if self.config.show_settings {
-                    "▶"
-                } else {
-                    "◀"
-                };
+        // check whether we should auto hide the setting button
+        let settings_toggle_reveal_width = 100.0
+            + if self.config.show_settings {
+                self.config.settings_width
+            } else {
+                0.0
+            };
+        let is_pointer_near_right_edge = ctx
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| screen_rect.max.x - pos.x <= settings_toggle_reveal_width);
+        let should_show_settings_toggle = !self.config.auto_hide_settings_button
+            || self.image_files.is_empty()
+            || is_pointer_near_right_edge;
 
-                // We use add_sized to force the 200px height
-                let toggle_btn = egui::Button::new(egui::RichText::new(text).size(20.0));
-                if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
-                    self.config.show_settings = !self.config.show_settings;
-                }
-            });
+        if should_show_settings_toggle {
+            egui::Area::new(egui::Id::new("settings_toggle"))
+                .fixed_pos([x_pos, y_pos])
+                .show(ctx, |ui| {
+                    let text = if self.config.show_settings {
+                        "▶"
+                    } else {
+                        "◀"
+                    };
+
+                    // We use add_sized to force the 200px height
+                    let toggle_btn = egui::Button::new(egui::RichText::new(text).size(20.0));
+                    if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
+                        self.config.show_settings = !self.config.show_settings;
+                    }
+                });
+        }
 
         if self.config.show_top_bar && !self.is_fullscreen {
             egui::TopBottomPanel::top("top_toolbar")
@@ -2245,6 +2271,9 @@ impl eframe::App for MangaReader {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked() {
                                 self.config.show_top_bar = false;
+                            }
+                            if ui.button("⚙").on_hover_text(tr("settings.title")).clicked() {
+                                self.config.show_settings = !self.config.show_settings;
                             }
                         });
                     });

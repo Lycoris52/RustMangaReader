@@ -3,6 +3,7 @@
   "page_view_options": "DoubleRL",
   "settings_width": 279.09375,
   "show_settings": true,
+  "auto_hide_settings_button": true,
   "transparency_support": false,
   "enable_single_file_caching": true,
   "image_delay": 0,

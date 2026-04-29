@@ -365,6 +365,8 @@ pub struct AppSettings {
     pub language: UiLanguage,
     pub settings_width: f32,
     pub show_settings: bool,
+    #[serde(default)]
+    pub auto_hide_settings_button: bool,
     pub transparency_support: bool,
     pub enable_single_file_caching: bool,
     pub image_delay: u64,
@@ -391,6 +393,7 @@ impl Default for AppSettings {
             language: UiLanguage::Japanese,
             settings_width: 300.0,
             show_settings: false,
+            auto_hide_settings_button: true,
             transparency_support: false,
             enable_single_file_caching: true,
             image_delay: 0,

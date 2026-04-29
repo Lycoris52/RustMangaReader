@@ -48,6 +48,7 @@
   "settings.others": "その他:",
   "settings.image_panel_background": "画像パネル背景色",
   "settings.show_toolbar": "ナビゲーションツールバーを表示",
+  "settings.auto_hide_settings_button": "設定ボタンを自動的に隠す",
   "settings.transparency": "透過画像をサポート",
   "settings.transparency.tooltip": "通常のマンガ画像に透過はほとんどありません。有効にすると読み込み速度が約30%低下します。",
   "settings.auto_image_fix": "画像バイト列の自動修復を有効化",

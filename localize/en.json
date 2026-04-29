@@ -48,6 +48,7 @@
   "settings.others": "Others:",
   "settings.image_panel_background": "Image Panel Background",
   "settings.show_toolbar": "Show Navigation Toolbar",
+  "settings.auto_hide_settings_button": "Auto-hide Settings Button",
   "settings.transparency": "Support Transparent Image",
   "settings.transparency.tooltip": "Manga normally does not have transparent image, enable this will sacrifice image load speed by about 30%.",
   "settings.auto_image_fix": "Enable Auto Image Bytes fix.",

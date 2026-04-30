@@ -620,6 +620,9 @@ impl MangaReader {
     }
 
     pub(super) fn ensure_top_down_loaded_around(&mut self, index: usize, ctx: &egui::Context) {
+        if self.config.page_view_options != PageViewOptions::TopDown {
+            return;
+        }
         if self.image_files.is_empty() {
             return;
         }
@@ -1037,9 +1040,11 @@ impl MangaReader {
 
             self.textures = self.load_pair(self.current_index, ctx);
             self.reset_top_down_buffer();
-            self.ensure_top_down_loaded_around(self.current_index, ctx);
-            for index in 0..self.image_files.len().min(5) {
-                self.ensure_top_down_texture_loaded(index, ctx);
+            if self.config.page_view_options == PageViewOptions::TopDown {
+                self.ensure_top_down_loaded_around(self.current_index, ctx);
+                for index in 0..self.image_files.len().min(5) {
+                    self.ensure_top_down_texture_loaded(index, ctx);
+                }
             }
         }
 

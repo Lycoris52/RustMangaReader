@@ -518,10 +518,7 @@ impl MangaReader {
                             ui.painter().image(
                                 next_next_tex.id(),
                                 egui::Rect::from_center_size(next_next_center, next_next_size),
-                                egui::Rect::from_min_max(
-                                    egui::Pos2::ZERO,
-                                    egui::pos2(1.0, 1.0),
-                                ),
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                                 egui::Color32::WHITE,
                             );
                         }

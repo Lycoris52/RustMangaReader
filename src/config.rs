@@ -268,8 +268,8 @@ impl Default for KeyConfig {
 impl KeyConfig {
     pub fn top_down_default() -> Self {
         Self {
-            slide_image_down: Some(Shortcut::new(egui::Key::ArrowUp, false, false, false)),
-            slide_image_up: Some(Shortcut::new(egui::Key::ArrowDown, false, false, false)),
+            slide_image_down: Some(Shortcut::new(egui::Key::ArrowDown, false, false, false)),
+            slide_image_up: Some(Shortcut::new(egui::Key::ArrowUp, false, false, false)),
             next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
             prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
             one_next_page: None,

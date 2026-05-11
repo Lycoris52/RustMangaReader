@@ -26,6 +26,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
+use windows::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE;
+use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 
 const LONG_CLICK_DURATION: Duration = Duration::from_millis(450);
 const GAMEPAD_INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(800);
@@ -51,6 +53,28 @@ fn control_mapping_header(base_label: &'static str, profile: ControlProfile) -> 
         tr(base_label),
         control_profile_header_suffix(profile)
     )
+}
+
+fn settings_path() -> PathBuf {
+    if is_packaged_app() {
+        let base = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let dir = base.join("RustMangaReader");
+        let _ = fs::create_dir_all(&dir);
+        return dir.join("settings.json");
+    }
+
+    let mut exe_path = env::current_exe().expect("Failed to get current exe path");
+    exe_path.pop();
+    exe_path.push("settings.json");
+    exe_path
+}
+
+fn is_packaged_app() -> bool {
+    let mut length = 0;
+    let result = unsafe { GetCurrentPackageFullName(&mut length, None) };
+    result != APPMODEL_ERROR_NO_PACKAGE
 }
 
 #[derive(Clone, PartialEq)]
@@ -438,9 +462,7 @@ pub struct MangaReader {
 impl MangaReader {
     pub fn new(_cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         font::setup_custom_fonts(&_cc.egui_ctx);
-        let mut exe_path = env::current_exe().expect("Failed to get current exe path");
-        exe_path.pop();
-        exe_path.push("settings.json");
+        let exe_path = settings_path();
         eprintln!("Loading setting from : {:?}", exe_path.to_str());
         let config: AppSettings = if let Ok(data) = std::fs::read_to_string(exe_path) {
             // add |_| here to accept the error argument but ignore it
@@ -500,9 +522,7 @@ impl MangaReader {
     fn save_settings(&self) {
         if let Ok(json) = serde_json::to_string_pretty(&self.config) {
             // write the config file in executable directory
-            let mut exe_path = env::current_exe().expect("Failed to get current exe path");
-            exe_path.pop();
-            exe_path.push("settings.json");
+            let exe_path = settings_path();
             let _ = std::fs::write(exe_path, json);
         }
     }

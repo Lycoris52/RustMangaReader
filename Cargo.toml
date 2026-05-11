@@ -23,7 +23,7 @@ unrar = "0.5.8"
 pdfium-render = "0.8.37"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
-windows = { version = "0.62.2", features = ["Win32_UI_Shell"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_Packaging_Appx", "Win32_UI_Shell"] }
 eframe = { version = "0.33.3", features = ["serde"] }
 egui = { version = "0.33.3", features = ["serde"] }
 rfd = "0.17.2"

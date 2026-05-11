@@ -33,16 +33,16 @@
     button.addEventListener('click', () => setLanguage(button.dataset.setLang));
   });
 
-  let saved = 'en';
+  let saved = 'ja';
+
   try {
     const stored = localStorage.getItem(storageKey);
+
     if (stored === 'en' || stored === 'ja') {
       saved = stored;
-    } else {
-      saved = (navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
     }
   } catch (error) {
-    saved = (navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+    saved = 'ja';
   }
 
   setLanguage(saved);

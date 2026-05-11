@@ -544,3 +544,29 @@ code {
     transform: none;
   }
 }
+
+.download-actions {
+  align-items: center;
+}
+
+.button-store {
+  color: var(--white);
+  background: var(--ink);
+  box-shadow: 5px 5px 0 var(--orange);
+}
+
+.button-portable {
+  color: var(--ink);
+  background: var(--yellow);
+}
+
+.download-note {
+  max-width: 620px;
+  margin: 16px 0 0;
+  padding: 12px 16px;
+  background: var(--paper-dark);
+  border: 3px solid var(--ink);
+  border-radius: 16px;
+  font-size: 0.98rem;
+  font-weight: 750;
+}

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="RustMangaReader is a lightweight offline manga and comic viewer for Windows, written in Rust." />
+  <title>RustMangaReader</title>
+  <link rel="icon" href="assets/icon.png" />
+  <link rel="stylesheet" href="site.css" />
+</head>
+<body data-lang="en">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header" aria-label="Site header">
+    <div class="language-switch" aria-label="Language switch">
+      <button class="lang-btn is-active" type="button" data-set-lang="en" aria-pressed="true">EN</button>
+      <button class="lang-btn" type="button" data-set-lang="ja" aria-pressed="false">日本語</button>
+    </div>
+
+    <a class="brand" href="#top" aria-label="RustMangaReader home">
+      <img src="assets/icon.png" alt="RustMangaReader character icon" width="44" height="44" />
+      <span>RustMangaReader</span>
+    </a>
+
+    <nav class="main-nav" aria-label="Main navigation">
+      <a href="#features" data-en="Features" data-ja="機能">Features</a>
+      <a href="#formats" data-en="Formats" data-ja="対応形式">Formats</a>
+      <a href="#build" data-en="Build" data-ja="ビルド">Build</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="top" class="hero panel-wrap">
+      <div class="hero-copy panel panel-big">
+        <p class="eyebrow" data-en="Windows manga viewer written in Rust" data-ja="Rust 製 Windows マンガビューア">Windows manga viewer written in Rust</p>
+        <h1 data-en="Offline comic reading, kept simple." data-ja="オフラインで快適に読むためのビューア。">Offline comic reading, kept simple.</h1>
+        <p class="lead" data-en="RustMangaReader is a lightweight manga and comic viewer for Windows. It focuses on fast page turning, direct archive reading, and practical reading modes without unnecessary effects." data-ja="RustMangaReader は Windows 向けの軽量マンガ・コミックビューアです。高速なページ送り、アーカイブの直接読み込み、実用的な閲覧モードに重点を置いています。">RustMangaReader is a lightweight manga and comic viewer for Windows. It focuses on fast page turning, direct archive reading, and practical reading modes without unnecessary effects.</p>
+        <div class="button-row">
+          <a class="button button-dark" href="https://github.com/Lycoris52/RustMangaReader" data-en="GitHub" data-ja="GitHub">GitHub</a>
+          <a class="button" href="https://github.com/Lycoris52/RustMangaReader/releases/latest" data-en="Latest release" data-ja="最新版リリース">Latest release</a>
+        </div>
+      </div>
+
+      <aside class="hero-art panel" aria-label="Application preview">
+        <div class="mascot-card">
+          <img src="assets/icon.png" alt="RustMangaReader character icon" />
+        </div>
+        <div class="app-frame">
+          <img src="assets/app-preview.png" alt="RustMangaReader app preview showing double page reading and settings panel" />
+        </div>
+      </aside>
+    </section>
+
+    <section id="features" class="section-block">
+      <div class="section-title">
+        <p class="eyebrow" data-en="What it does" data-ja="主な機能">What it does</p>
+        <h2 data-en="Made for local reading." data-ja="ローカル閲覧のための設計。">Made for local reading.</h2>
+      </div>
+
+      <div class="card-grid">
+        <article class="info-card">
+          <span class="card-tag">01</span>
+          <h3 data-en="Fast page turning" data-ja="高速なページ送り">Fast page turning</h3>
+          <p data-en="A dual-buffer system preloads the next and previous pages in the background, so page changes feel immediate." data-ja="デュアルバッファで前後のページをバックグラウンドでプリロードし、ページ切り替えを素早く行います。">A dual-buffer system preloads the next and previous pages in the background, so page changes feel immediate.</p>
+        </article>
+
+        <article class="info-card">
+          <span class="card-tag">02</span>
+          <h3 data-en="Windows focused" data-ja="Windows 向け最適化">Windows focused</h3>
+          <p data-en="Uses Windows-native sorting, GPU rendering, and direct compressed-file reading without extracting archives first." data-ja="Windows ネイティブのソート順、GPU レンダリング、圧縮ファイルの直接読み込みに対応しています。">Uses Windows-native sorting, GPU rendering, and direct compressed-file reading without extracting archives first.</p>
+        </article>
+
+        <article class="info-card">
+          <span class="card-tag">03</span>
+          <h3 data-en="Reading modes" data-ja="閲覧モード">Reading modes</h3>
+          <p data-en="Single page, double page in both directions, top-down web manga mode, and cover/spread shift settings are supported." data-ja="単一ページ、左右両方向の見開き、縦スクロールの Web マンガモード、表紙と見開きのズレ調整に対応します。">Single page, double page in both directions, top-down web manga mode, and cover/spread shift settings are supported.</p>
+        </article>
+
+        <article class="info-card">
+          <span class="card-tag">04</span>
+          <h3 data-en="Image scaling" data-ja="画像スケーリング">Image scaling</h3>
+          <p data-en="Choose from several resampling methods, from Nearest Neighbor for speed to Lanczos3 for quality." data-ja="速度重視の Nearest Neighbor から品質重視の Lanczos3 まで、複数のリサンプリング方式を選べます。">Choose from several resampling methods, from Nearest Neighbor for speed to Lanczos3 for quality.</p>
+        </article>
+
+        <article class="info-card">
+          <span class="card-tag">05</span>
+          <h3 data-en="Custom controls" data-ja="操作のカスタマイズ">Custom controls</h3>
+          <p data-en="Keyboard actions can be rebound. Mouse, gamepad, fullscreen, and quick settings panel support are included." data-ja="キーボード操作は自由に割り当て可能です。マウス、ゲームパッド、全画面表示、クイック設定パネルにも対応します。">Keyboard actions can be rebound. Mouse, gamepad, fullscreen, and quick settings panel support are included.</p>
+        </article>
+
+        <article class="info-card">
+          <span class="card-tag">06</span>
+          <h3 data-en="Free feedback channel" data-ja="無料利用とフィードバック">Free feedback channel</h3>
+          <p data-en="The app is free to use. Bugs, performance reports, and feature requests can be sent through GitHub Issues or Hugging Face messages." data-ja="アプリは無料で利用できます。バグ、動作の重さ、機能要望は GitHub Issues または Hugging Face のメッセージで連絡できます。">The app is free to use. Bugs, performance reports, and feature requests can be sent through GitHub Issues or Hugging Face messages.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="formats" class="section-block split-section">
+      <div class="panel format-panel">
+        <p class="eyebrow" data-en="Supported files" data-ja="対応ファイル">Supported files</p>
+        <h2 data-en="Archives, folders, PDF, and images." data-ja="アーカイブ、フォルダ、PDF、画像。">Archives, folders, PDF, and images.</h2>
+        <p data-en="RustMangaReader reads compressed archives and normal folders directly. It is meant for files you already have on your machine." data-ja="RustMangaReader は圧縮アーカイブと通常フォルダを直接読み込みます。手元にあるファイルを読むためのビューアです。">RustMangaReader reads compressed archives and normal folders directly. It is meant for files you already have on your machine.</p>
+      </div>
+
+      <div class="format-lists">
+        <div class="mini-panel">
+          <h3 data-en="Containers" data-ja="コンテナ">Containers</h3>
+          <p>.zip, .cbz, .rar, .cbr, .pdf, folders</p>
+        </div>
+        <div class="mini-panel">
+          <h3 data-en="Image types" data-ja="画像形式">Image types</h3>
+          <p>.png, .jpg, .jpeg, .bmp, .tiff, .webp, .avif, .tga, .gif</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="build" class="section-block build-section">
+      <div class="section-title">
+        <p class="eyebrow" data-en="Build from source" data-ja="ソースからビルド">Build from source</p>
+        <h2 data-en="Windows only." data-ja="Windows 専用です。">Windows only.</h2>
+      </div>
+
+      <div class="terminal-card" aria-label="Build command">
+        <div class="terminal-bar">
+          <span></span><span></span><span></span>
+        </div>
+        <pre><code>git clone https://github.com/Lycoris52/RustMangaReader.git
+cd RustMangaReader
+cargo build --release</code></pre>
+      </div>
+
+      <p class="note" data-en="After building, the executable and settings.json will be in target/release/." data-ja="ビルド後、実行ファイルと settings.json は target/release/ に生成されます。">After building, the executable and settings.json will be in target/release/.</p>
+    </section>
+
+    <section class="section-block disclaimer panel">
+      <h2 data-en="Content policy" data-ja="コンテンツについて">Content policy</h2>
+      <p data-en="RustMangaReader is only a viewing utility. It does not provide, host, recommend, or link to manga, comics, archives, or download sources. Users are responsible for the content they open." data-ja="RustMangaReader は閲覧専用のユーティリティです。マンガ、コミック、アーカイブ、ダウンロード元の提供、ホスト、推奨、リンクは行いません。開くコンテンツはユーザー自身の責任で管理してください。">RustMangaReader is only a viewing utility. It does not provide, host, recommend, or link to manga, comics, archives, or download sources. Users are responsible for the content they open.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p data-en="RustMangaReader uses Pdfium for PDF rendering. Licensed under Apache-2.0." data-ja="RustMangaReader は PDF レンダリングに Pdfium を使用しています。Apache-2.0 ライセンスです。">RustMangaReader uses Pdfium for PDF rendering. Licensed under Apache-2.0.</p>
+    <a href="https://github.com/Lycoris52/RustMangaReader" data-en="Repository" data-ja="リポジトリ">Repository</a>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>

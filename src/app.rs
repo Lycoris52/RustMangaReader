@@ -277,7 +277,7 @@ fn render_control_mapping_settings(
         let unassigned_label = tr("common.unassigned").to_owned();
         egui::Grid::new(format!("mouse_grid_{profile:?}"))
             .num_columns(2)
-            .spacing([20.0, 10.0])
+            .spacing([10.0, 10.0])
             .show(ui, |ui| {
                 for (label, id, action) in [
                     (
@@ -398,7 +398,7 @@ fn render_control_mapping_settings(
         let unassigned_label = tr("common.unassigned").to_owned();
         egui::Grid::new(format!("gamepad_grid_{profile:?}"))
             .num_columns(2)
-            .spacing([20.0, 10.0])
+            .spacing([10.0, 10.0])
             .show(ui, |ui| {
                 for button in GamepadButton::ALL {
                     ui.label(gamepad_button_label(button));
@@ -2018,7 +2018,7 @@ impl eframe::App for MangaReader {
                                     );
                                     let slider_width = ui.available_width() * 0.98;
                                     let previous_slider_width = ui.spacing().slider_width;
-                                    ui.spacing_mut().slider_width = slider_width - 80.0;
+                                    ui.spacing_mut().slider_width = slider_width - 120.0;
                                     changed |= ui
                                         .add(
                                             egui::Slider::new(
@@ -2031,7 +2031,7 @@ impl eframe::App for MangaReader {
                                             "settings.page_view.center_offset.tooltip",
                                         ))
                                         .changed();
-                                    ui.spacing_mut().slider_width = previous_slider_width - 80.0;
+                                    ui.spacing_mut().slider_width = previous_slider_width - 40.0;
 
                                     if changed {
                                         self.reset_buffer();
@@ -2106,7 +2106,7 @@ impl eframe::App for MangaReader {
 
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
-                                    self.config.settings_width * 0.9 - 120.0;
+                                    self.config.settings_width * 0.9 - 160.0;
                                 let zoom_slider = ui.add(
                                     egui::Slider::new(&mut self.zoom_factor, 0.1..=3.0)
                                         .text(tr("settings.zoom.slider")),
@@ -2223,7 +2223,7 @@ impl eframe::App for MangaReader {
                                 .on_hover_text(tr("settings.single_file_cache.tooltip"));
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
-                                    self.config.settings_width * 0.9 - 150.0;
+                                    self.config.settings_width * 0.9 - 190.0;
                                 ui.add(
                                     egui::Slider::new(&mut self.config.image_delay, 0..=1000)
                                         .text(tr("settings.image_delay")),
@@ -2232,7 +2232,7 @@ impl eframe::App for MangaReader {
                                 ui.spacing_mut().slider_width = previous_slider_width;
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
-                                    self.config.settings_width * 0.9 - 150.0;
+                                    self.config.settings_width * 0.9 - 190.0;
                                 let mut slide_speed_slider =
                                     (self.config.top_down_image_slide_speed.max(0.005) / 0.05)
                                         .log10()
@@ -2253,7 +2253,7 @@ impl eframe::App for MangaReader {
                                 ui.spacing_mut().slider_width = previous_slider_width;
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
-                                    self.config.settings_width * 0.9 - 150.0;
+                                    self.config.settings_width * 0.9 - 190.0;
                                 if ui
                                     .add(
                                         egui::Slider::new(
@@ -2265,6 +2265,63 @@ impl eframe::App for MangaReader {
                                     .on_hover_text(tr("settings.top_down_drag_speed.tooltip"))
                                     .changed()
                                 {
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 190.0;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.settings_button_width,
+                                            3.0..=30.0,
+                                        )
+                                        .text(tr("settings.settings_button_width")),
+                                    )
+                                    .on_hover_text(tr("settings.settings_button_width.tooltip"))
+                                    .changed()
+                                {
+                                    self.config.settings_button_width =
+                                        self.config.settings_button_width.clamp(3.0, 30.0);
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 190.0;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.settings_button_x_offset,
+                                            0.0..=20.0,
+                                        )
+                                        .text(tr("settings.settings_button_x_position")),
+                                    )
+                                    .on_hover_text(tr("settings.settings_button_x_position.tooltip"))
+                                    .changed()
+                                {
+                                    self.config.settings_button_x_offset =
+                                        self.config.settings_button_x_offset.clamp(0.0, 20.0);
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 190.0;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.settings_button_y_offset,
+                                            -1.0..=1.0,
+                                        )
+                                        .text(tr("settings.settings_button_y_position")),
+                                    )
+                                    .on_hover_text(tr("settings.settings_button_y_position.tooltip"))
+                                    .changed()
+                                {
+                                    self.config.settings_button_y_offset =
+                                        self.config.settings_button_y_offset.clamp(-1.0, 1.0);
                                     self.save_settings();
                                 }
                                 ui.spacing_mut().slider_width = previous_slider_width;
@@ -2315,20 +2372,27 @@ impl eframe::App for MangaReader {
 
         // This allows opening/closing the settings
         let screen_rect = ctx.content_rect();
-        let button_height = 160.0;
+        let button_width = self.config.settings_button_width.clamp(3.0, 30.0);
+        let button_height = 140.0;
 
         // Calculate X position based on whether panel is open
-        let x_pos = if self.config.show_settings {
-            screen_rect.max.x - self.config.settings_width - 45.0
+        let base_x_pos = if self.config.show_settings {
+            screen_rect.max.x - self.config.settings_width - button_width - 20.0
         } else {
-            screen_rect.max.x - 25.0
+            screen_rect.max.x
         };
+        let x_pos = base_x_pos + self.config.settings_button_x_offset.clamp(0.0, 20.0);
 
         // Calculate Y position to center the 200px button vertically
-        let y_pos = screen_rect.center().y - (button_height / 2.0);
+        let centered_y_pos = screen_rect.center().y - (button_height / 2.0);
+        let min_y_pos = screen_rect.min.y;
+        let max_y_pos = screen_rect.max.y - button_height;
+        let y_pos = centered_y_pos
+            + self.config.settings_button_y_offset * ((max_y_pos - min_y_pos) / 2.0);
+        let y_pos = y_pos.clamp(min_y_pos, max_y_pos);
 
         // check whether we should auto hide the setting button
-        let settings_toggle_reveal_width = 100.0
+        let settings_toggle_reveal_width = 60.0
             + if self.config.show_settings {
                 self.config.settings_width
             } else {
@@ -2396,10 +2460,10 @@ impl eframe::App for MangaReader {
 
                         let toggle_btn = egui::Button::new(
                             egui::RichText::new(text)
-                                .size(20.0)
+                                .size(if button_width < 16.0 { 0.0 } else { 16.0 })
                                 .color(ui.visuals().text_color()),
                         );
-                        if ui.add_sized([25.0, button_height], toggle_btn).clicked() {
+                        if ui.add_sized([button_width, button_height], toggle_btn).clicked() {
                             self.config.show_settings = !self.config.show_settings;
                             self.settings_toggle_last_visible_at = Instant::now();
                         }

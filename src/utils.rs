@@ -190,7 +190,7 @@ pub fn render_mouse_action_dropdown(
                 .map(|(_, label)| label.as_str())
                 .unwrap_or(unassigned_label),
         )
-        .width(180.0)
+        .width(150.0)
         .show_ui(ui, |ui| {
             for (option, label) in action_options {
                 ui.selectable_value(action, *option, label);

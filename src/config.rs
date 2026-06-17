@@ -426,6 +426,18 @@ fn default_top_down_image_drag_speed() -> f32 {
     3.0
 }
 
+fn default_settings_button_y_offset() -> f32 {
+    0.0
+}
+
+fn default_settings_button_width() -> f32 {
+    20.0
+}
+
+fn default_settings_button_x_offset() -> f32 {
+    0.0
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
@@ -464,6 +476,12 @@ pub struct AppSettings {
     pub top_down_image_slide_speed: f32,
     #[serde(default = "default_top_down_image_drag_speed")]
     pub top_down_image_drag_speed: f32,
+    #[serde(default = "default_settings_button_width")]
+    pub settings_button_width: f32,
+    #[serde(default = "default_settings_button_x_offset")]
+    pub settings_button_x_offset: f32,
+    #[serde(default = "default_settings_button_y_offset")]
+    pub settings_button_y_offset: f32,
     pub show_top_bar: bool,
     pub enable_auto_image_byte_fix: bool,
     pub last_page_action: LastPageAction,
@@ -494,6 +512,9 @@ impl Default for AppSettings {
             top_down_double_click_threshold_ms: 160,
             top_down_image_slide_speed: default_top_down_image_slide_speed(),
             top_down_image_drag_speed: default_top_down_image_drag_speed(),
+            settings_button_width: default_settings_button_width(),
+            settings_button_x_offset: default_settings_button_x_offset(),
+            settings_button_y_offset: default_settings_button_y_offset(),
             show_top_bar: true,
             enable_auto_image_byte_fix: true,
             last_page_action: LastPageAction::GotoNextFile,

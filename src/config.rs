@@ -111,6 +111,8 @@ pub enum MangaAction {
     None,
     SlideImageDown,
     SlideImageUp,
+    ToggleAutoScroll,
+    ReloadCurrentImage,
     NextPage,
     PrevPage,
     OneNextPage,
@@ -128,10 +130,12 @@ pub enum MangaAction {
 }
 
 impl MangaAction {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::None,
         Self::SlideImageDown,
         Self::SlideImageUp,
+        Self::ToggleAutoScroll,
+        Self::ReloadCurrentImage,
         Self::NextPage,
         Self::PrevPage,
         Self::OneNextPage,
@@ -226,6 +230,10 @@ pub struct KeyConfig {
     pub slide_image_down: Option<Shortcut>,
     #[serde(default)]
     pub slide_image_up: Option<Shortcut>,
+    #[serde(default)]
+    pub toggle_auto_scroll: Option<Shortcut>,
+    #[serde(default)]
+    pub reload_current_image: Option<Shortcut>,
     pub next_page: Option<Shortcut>,
     pub prev_page: Option<Shortcut>,
     pub one_next_page: Option<Shortcut>,
@@ -247,6 +255,8 @@ impl Default for KeyConfig {
         Self {
             slide_image_down: None,
             slide_image_up: None,
+            toggle_auto_scroll: None,
+            reload_current_image: None,
             next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
             prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
             one_next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, true)),
@@ -270,6 +280,8 @@ impl KeyConfig {
         Self {
             slide_image_down: Some(Shortcut::new(egui::Key::ArrowDown, false, false, false)),
             slide_image_up: Some(Shortcut::new(egui::Key::ArrowUp, false, false, false)),
+            toggle_auto_scroll: None,
+            reload_current_image: None,
             next_page: Some(Shortcut::new(egui::Key::ArrowLeft, false, false, false)),
             prev_page: Some(Shortcut::new(egui::Key::ArrowRight, false, false, false)),
             one_next_page: None,
@@ -438,6 +450,10 @@ fn default_settings_button_x_offset() -> f32 {
     0.0
 }
 
+fn default_top_toolbar_scale() -> f32 {
+    1.0
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
@@ -482,6 +498,8 @@ pub struct AppSettings {
     pub settings_button_x_offset: f32,
     #[serde(default = "default_settings_button_y_offset")]
     pub settings_button_y_offset: f32,
+    #[serde(default = "default_top_toolbar_scale")]
+    pub top_toolbar_scale: f32,
     pub show_top_bar: bool,
     pub enable_auto_image_byte_fix: bool,
     pub last_page_action: LastPageAction,
@@ -515,6 +533,7 @@ impl Default for AppSettings {
             settings_button_width: default_settings_button_width(),
             settings_button_x_offset: default_settings_button_x_offset(),
             settings_button_y_offset: default_settings_button_y_offset(),
+            top_toolbar_scale: default_top_toolbar_scale(),
             show_top_bar: true,
             enable_auto_image_byte_fix: true,
             last_page_action: LastPageAction::GotoNextFile,

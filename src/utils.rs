@@ -217,6 +217,8 @@ pub fn action_label(action: MangaAction) -> &'static str {
         MangaAction::None => tr("action.none"),
         MangaAction::SlideImageDown => tr("action.slide_image_down"),
         MangaAction::SlideImageUp => tr("action.slide_image_up"),
+        MangaAction::ToggleAutoScroll => tr("action.toggle_auto_scroll"),
+        MangaAction::ReloadCurrentImage => tr("action.reload_current_image"),
         MangaAction::NextPage => tr("action.next_page"),
         MangaAction::PrevPage => tr("action.prev_page"),
         MangaAction::OneNextPage => tr("action.one_next_page"),

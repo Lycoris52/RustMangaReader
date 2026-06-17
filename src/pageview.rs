@@ -462,8 +462,8 @@ impl MangaReader {
                             if let Some(prev_prev_index) = self.current_index.checked_sub(2) {
                                 if let Some(prev_prev_tex) = self.top_down_texture(prev_prev_index)
                                 {
-                                    let prev_prev_size =
-                                        self.top_down_image_draw_size(prev_prev_tex, container_size);
+                                    let prev_prev_size = self
+                                        .top_down_image_draw_size(prev_prev_tex, container_size);
                                     let prev_prev_distance = prev_distance
                                         + size.y * 0.5
                                         + page_gap

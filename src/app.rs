@@ -33,6 +33,8 @@ const LONG_CLICK_DURATION: Duration = Duration::from_millis(450);
 const GAMEPAD_INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(800);
 const MOUSE_DRAG_THRESHOLD: f32 = 6.0;
 const SETTINGS_TOGGLE_FADE_DURATION: Duration = Duration::from_secs(1);
+const AUTO_SCROLL_MIN_DELAY_MS: u64 = 200;
+const AUTO_SCROLL_MAX_DELAY_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ControlProfile {
@@ -169,6 +171,16 @@ fn render_control_mapping_settings(
                         tr("settings.key.slide_image_up"),
                         "Slide Image Up",
                         &mut keys.slide_image_up,
+                    ),
+                    (
+                        tr("settings.key.toggle_auto_scroll"),
+                        "Toggle Auto Scroll",
+                        &mut keys.toggle_auto_scroll,
+                    ),
+                    (
+                        tr("settings.key.reload_current_image"),
+                        "Reload Current Image",
+                        &mut keys.reload_current_image,
                     ),
                     (
                         tr("settings.key.next_page"),
@@ -445,6 +457,8 @@ pub struct MangaReader {
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
+    auto_scroll_enabled: bool,
+    auto_scroll_next_tick: Option<Instant>,
     zoom_factor: f32,
     pan_offset: egui::Vec2,
     is_scrubbing: bool,
@@ -504,6 +518,8 @@ impl MangaReader {
             texture_cache: Default::default(),
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
+            auto_scroll_enabled: false,
+            auto_scroll_next_tick: None,
             zoom_factor: 1.0,
             pan_offset: egui::Vec2::ZERO,
             is_scrubbing: false,
@@ -525,6 +541,64 @@ impl MangaReader {
             let exe_path = settings_path();
             let _ = std::fs::write(exe_path, json);
         }
+    }
+
+    fn auto_scroll_delay_ms(&self) -> u64 {
+        self.config
+            .image_delay
+            .clamp(AUTO_SCROLL_MIN_DELAY_MS, AUTO_SCROLL_MAX_DELAY_MS)
+    }
+
+    fn schedule_auto_scroll(&mut self, ctx: &egui::Context) {
+        let delay = Duration::from_millis(self.auto_scroll_delay_ms());
+        let next_tick = Instant::now() + delay;
+        self.auto_scroll_next_tick = Some(next_tick);
+        ctx.request_repaint_after(delay);
+    }
+
+    fn stop_auto_scroll(&mut self) {
+        self.auto_scroll_enabled = false;
+        self.auto_scroll_next_tick = None;
+    }
+
+    fn set_auto_scroll_enabled(&mut self, enabled: bool, ctx: &egui::Context) {
+        if enabled {
+            self.auto_scroll_enabled = true;
+            self.schedule_auto_scroll(ctx);
+        } else {
+            self.stop_auto_scroll();
+        }
+    }
+
+    fn toggle_auto_scroll(&mut self, ctx: &egui::Context) {
+        let enabled = !self.auto_scroll_enabled;
+        self.set_auto_scroll_enabled(enabled, ctx);
+    }
+
+    fn reload_current_image(&mut self, ctx: &egui::Context) {
+        if self.image_files.is_empty() {
+            return;
+        }
+
+        self.stop_auto_scroll();
+        self.texture_cache.clear();
+        self.reset_buffer();
+        self.reset_pan();
+        self.last_buffered_index = None;
+
+        if self.config.page_view_options == PageViewOptions::TopDown {
+            self.textures = [None, None];
+            self.ensure_top_down_loaded_around(self.current_index, ctx);
+            let preload_count = self.image_files.len().min(5);
+            for index in 0..preload_count {
+                self.ensure_top_down_texture_loaded(index, ctx);
+            }
+        } else {
+            self.textures = self.load_pair(self.current_index, ctx);
+        }
+
+        self.page_indicator_time = Some(Instant::now());
+        ctx.request_repaint();
     }
 
     fn open_file_dialog(&mut self) {
@@ -937,6 +1011,7 @@ impl MangaReader {
     }
 
     fn load_source(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.stop_auto_scroll();
         let mut target_path = path.clone();
         let mut start_at_filename: Option<String> = None;
 
@@ -1566,6 +1641,8 @@ impl MangaReader {
                     self.clamp_top_down_scroll_offset();
                 }
             }
+            MangaAction::ToggleAutoScroll => self.toggle_auto_scroll(ctx),
+            MangaAction::ReloadCurrentImage => self.reload_current_image(ctx),
             MangaAction::NextPage => self.next_page(ctx, false),
             MangaAction::PrevPage => self.prev_page(ctx, false),
             MangaAction::OneNextPage => self.next_page(ctx, true),
@@ -1717,6 +1794,12 @@ impl eframe::App for MangaReader {
                                         keys.slide_image_down = Some(new_shortcut)
                                     }
                                     "Slide Image Up" => keys.slide_image_up = Some(new_shortcut),
+                                    "Toggle Auto Scroll" => {
+                                        keys.toggle_auto_scroll = Some(new_shortcut)
+                                    }
+                                    "Reload Current Image" => {
+                                        keys.reload_current_image = Some(new_shortcut)
+                                    }
                                     "Next Page" => keys.next_page = Some(new_shortcut),
                                     "Previous Page" => keys.prev_page = Some(new_shortcut),
                                     "1 Next Page" => keys.one_next_page = Some(new_shortcut),
@@ -1765,6 +1848,12 @@ impl eframe::App for MangaReader {
                 }
                 if is_triggered(&keys.slide_image_up) {
                     action_to_run = MangaAction::SlideImageUp;
+                }
+                if is_triggered(&keys.toggle_auto_scroll) {
+                    action_to_run = MangaAction::ToggleAutoScroll;
+                }
+                if is_triggered(&keys.reload_current_image) {
+                    action_to_run = MangaAction::ReloadCurrentImage;
                 }
                 if is_triggered(&keys.next_page) {
                     action_to_run = MangaAction::NextPage;
@@ -2224,11 +2313,19 @@ impl eframe::App for MangaReader {
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
                                     self.config.settings_width * 0.9 - 190.0;
-                                ui.add(
-                                    egui::Slider::new(&mut self.config.image_delay, 0..=1000)
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.image_delay,
+                                            0..=AUTO_SCROLL_MAX_DELAY_MS,
+                                        )
                                         .text(tr("settings.image_delay")),
-                                )
-                                .on_hover_text(tr("settings.image_delay.tooltip"));
+                                    )
+                                    .on_hover_text(tr("settings.image_delay.tooltip"))
+                                    .changed()
+                                {
+                                    self.save_settings();
+                                }
                                 ui.spacing_mut().slider_width = previous_slider_width;
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
@@ -2298,7 +2395,9 @@ impl eframe::App for MangaReader {
                                         )
                                         .text(tr("settings.settings_button_x_position")),
                                     )
-                                    .on_hover_text(tr("settings.settings_button_x_position.tooltip"))
+                                    .on_hover_text(tr(
+                                        "settings.settings_button_x_position.tooltip",
+                                    ))
                                     .changed()
                                 {
                                     self.config.settings_button_x_offset =
@@ -2317,11 +2416,32 @@ impl eframe::App for MangaReader {
                                         )
                                         .text(tr("settings.settings_button_y_position")),
                                     )
-                                    .on_hover_text(tr("settings.settings_button_y_position.tooltip"))
+                                    .on_hover_text(tr(
+                                        "settings.settings_button_y_position.tooltip",
+                                    ))
                                     .changed()
                                 {
                                     self.config.settings_button_y_offset =
                                         self.config.settings_button_y_offset.clamp(-1.0, 1.0);
+                                    self.save_settings();
+                                }
+                                ui.spacing_mut().slider_width = previous_slider_width;
+                                let previous_slider_width = ui.spacing().slider_width;
+                                ui.spacing_mut().slider_width =
+                                    self.config.settings_width * 0.9 - 190.0;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.config.top_toolbar_scale,
+                                            1.0..=3.0,
+                                        )
+                                        .text(tr("settings.top_toolbar_scale")),
+                                    )
+                                    .on_hover_text(tr("settings.top_toolbar_scale.tooltip"))
+                                    .changed()
+                                {
+                                    self.config.top_toolbar_scale =
+                                        self.config.top_toolbar_scale.clamp(1.0, 3.0);
                                     self.save_settings();
                                 }
                                 ui.spacing_mut().slider_width = previous_slider_width;
@@ -2387,8 +2507,8 @@ impl eframe::App for MangaReader {
         let centered_y_pos = screen_rect.center().y - (button_height / 2.0);
         let min_y_pos = screen_rect.min.y;
         let max_y_pos = screen_rect.max.y - button_height;
-        let y_pos = centered_y_pos
-            + self.config.settings_button_y_offset * ((max_y_pos - min_y_pos) / 2.0);
+        let y_pos =
+            centered_y_pos + self.config.settings_button_y_offset * ((max_y_pos - min_y_pos) / 2.0);
         let y_pos = y_pos.clamp(min_y_pos, max_y_pos);
 
         // check whether we should auto hide the setting button
@@ -2432,8 +2552,11 @@ impl eframe::App for MangaReader {
 
                     ui.scope(|ui| {
                         let mut visuals = ui.style().visuals.clone();
-                        visuals.widgets.inactive.bg_fill =
-                            visuals.widgets.inactive.bg_fill.gamma_multiply(settings_toggle_opacity);
+                        visuals.widgets.inactive.bg_fill = visuals
+                            .widgets
+                            .inactive
+                            .bg_fill
+                            .gamma_multiply(settings_toggle_opacity);
                         visuals.widgets.inactive.weak_bg_fill = visuals
                             .widgets
                             .inactive
@@ -2463,7 +2586,10 @@ impl eframe::App for MangaReader {
                                 .size(if button_width < 16.0 { 0.0 } else { 16.0 })
                                 .color(ui.visuals().text_color()),
                         );
-                        if ui.add_sized([button_width, button_height], toggle_btn).clicked() {
+                        if ui
+                            .add_sized([button_width, button_height], toggle_btn)
+                            .clicked()
+                        {
                             self.config.show_settings = !self.config.show_settings;
                             self.settings_toggle_last_visible_at = Instant::now();
                         }
@@ -2479,158 +2605,250 @@ impl eframe::App for MangaReader {
                         .inner_margin(4.0),
                 )
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        // --- Folder Navigation ---
-                        if ui
-                            .button("📁⏮")
-                            .on_hover_text(tr("toolbar.prev_folder"))
-                            .clicked()
-                        {
-                            self.prev_folder(ctx);
-                        }
-                        if ui
-                            .button("📁⏭")
-                            .on_hover_text(tr("toolbar.next_folder"))
-                            .clicked()
-                        {
-                            self.next_folder(ctx);
-                        }
-                        ui.separator();
-
-                        // --- File Navigation ---
-                        if ui
-                            .button("📦⏮")
-                            .on_hover_text(tr("toolbar.prev_file"))
-                            .clicked()
-                        {
-                            self.prev_zip(ctx);
-                        }
-                        if ui
-                            .button("📦⏭")
-                            .on_hover_text(tr("toolbar.next_file"))
-                            .clicked()
-                        {
-                            self.next_zip(ctx);
-                        }
-                        ui.separator();
-
-                        // --- Page Navigation ---
-                        if ui
-                            .button("⏮")
-                            .on_hover_text(tr("toolbar.first_page"))
-                            .clicked()
-                        {
-                            self.go_to_first_page(ctx);
-                        }
-                        if ui
-                            .button("◀")
-                            .on_hover_text(tr("toolbar.prev_page"))
-                            .clicked()
-                        {
-                            self.prev_page(ctx, false);
-                        }
-
-                        // Page Indicator in middle
-                        ui.label(format!(
-                            "{} / {}",
-                            self.current_index + 1,
-                            self.image_files.len()
-                        ));
-
-                        if ui
-                            .button("▶")
-                            .on_hover_text(tr("toolbar.next_page"))
-                            .clicked()
-                        {
-                            self.next_page(ctx, false);
-                        }
-                        if ui
-                            .button("⏭")
-                            .on_hover_text(tr("toolbar.last_page"))
-                            .clicked()
-                        {
-                            self.go_to_last_page(ctx);
-                        }
-                        ui.separator();
-
-                        if ui
-                            .button("1◀")
-                            .on_hover_text(tr("toolbar.prev_page"))
-                            .clicked()
-                        {
-                            self.prev_page(ctx, true);
-                        }
-
-                        if ui
-                            .button("▶1")
-                            .on_hover_text(tr("toolbar.next_page"))
-                            .clicked()
-                        {
-                            self.next_page(ctx, true);
-                        }
-                        ui.separator();
-
-                        // --- View Toggles ---
-                        let shift_label = if self.is_shifted {
-                            tr("state.odd_page")
-                        } else {
-                            tr("state.even_page")
-                        };
-                        if ui.button(shift_label).clicked() {
-                            self.change_shifted_mode(ctx);
-                        }
-
-                        if ui
-                            .button("📺")
-                            .on_hover_text(tr("toolbar.fullscreen"))
-                            .clicked()
-                        {
-                            self.is_fullscreen = !self.is_fullscreen;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
-                                self.is_fullscreen,
-                            ));
-                        }
-                        ui.separator();
-                        if ui.button(tr("toolbar.open_file")).clicked() {
-                            self.open_file_dialog();
-                        }
-
-                        ui.separator();
-                        // --- THE SLIDER ---
-                        // We use a 1-based slider for better user experience
-                        let mut page_val = self.current_index + 1;
-                        let max_pages = self.image_files.len().max(1);
-
-                        // ui.available_width() ensures the slider stretches to fill the gap
-                        let slider_width = ui.available_width() / 3.0; // Reserve space for right-side buttons
-
+                    ui.scope(|ui| {
+                        let toolbar_scale = self.config.top_toolbar_scale.clamp(1.0, 3.0);
                         let style = ui.style_mut();
-                        style.spacing.slider_width = slider_width;
-
-                        let slider = ui.add(
-                            egui::Slider::new(&mut page_val, 1..=max_pages)
-                                .show_value(true)
-                                .text(format!("/ {}", max_pages)),
-                        );
-                        self.is_scrubbing = slider.dragged();
-                        if slider.changed() {
-                            self.current_index = page_val - 1;
-                            self.reset_buffer();
-                            self.reset_pan();
-                            self.textures = self.load_pair(self.current_index, ctx);
+                        style.spacing.interact_size.y *= toolbar_scale;
+                        style.spacing.button_padding *= toolbar_scale;
+                        style.spacing.item_spacing *= toolbar_scale;
+                        if let Some(font_id) = style.text_styles.get_mut(&egui::TextStyle::Button) {
+                            font_id.size *= toolbar_scale;
+                        }
+                        if let Some(font_id) = style.text_styles.get_mut(&egui::TextStyle::Body) {
+                            font_id.size *= toolbar_scale;
                         }
 
-                        // --- Hide Button ---
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked() {
-                                self.config.show_top_bar = false;
+                        ui.horizontal(|ui| {
+                            // --- Folder Navigation ---
+                            if ui
+                                .button("📁⏮")
+                                .on_hover_text(tr("toolbar.prev_folder"))
+                                .clicked()
+                            {
+                                self.prev_folder(ctx);
                             }
-                            if ui.button("⚙").on_hover_text(tr("settings.title")).clicked() {
-                                self.config.show_settings = !self.config.show_settings;
+                            if ui
+                                .button("📁⏭")
+                                .on_hover_text(tr("toolbar.next_folder"))
+                                .clicked()
+                            {
+                                self.next_folder(ctx);
                             }
+                            ui.separator();
+
+                            // --- File Navigation ---
+                            if ui
+                                .button("📦⏮")
+                                .on_hover_text(tr("toolbar.prev_file"))
+                                .clicked()
+                            {
+                                self.prev_zip(ctx);
+                            }
+                            if ui
+                                .button("📦⏭")
+                                .on_hover_text(tr("toolbar.next_file"))
+                                .clicked()
+                            {
+                                self.next_zip(ctx);
+                            }
+                            ui.separator();
+
+                            // --- Page Navigation ---
+                            if ui
+                                .button("⏮")
+                                .on_hover_text(tr("toolbar.first_page"))
+                                .clicked()
+                            {
+                                self.go_to_first_page(ctx);
+                            }
+                            if ui
+                                .button("◀")
+                                .on_hover_text(tr("toolbar.prev_page"))
+                                .clicked()
+                            {
+                                self.prev_page(ctx, false);
+                            }
+
+                            // Page Indicator in middle
+                            ui.label(format!(
+                                "{} / {}",
+                                self.current_index + 1,
+                                self.image_files.len()
+                            ));
+
+                            if ui
+                                .button("▶")
+                                .on_hover_text(tr("toolbar.next_page"))
+                                .clicked()
+                            {
+                                self.next_page(ctx, false);
+                            }
+                            if ui
+                                .button("⏭")
+                                .on_hover_text(tr("toolbar.last_page"))
+                                .clicked()
+                            {
+                                self.go_to_last_page(ctx);
+                            }
+                            ui.separator();
+
+                            if ui
+                                .button("1◀")
+                                .on_hover_text(tr("toolbar.prev_page"))
+                                .clicked()
+                            {
+                                self.prev_page(ctx, true);
+                            }
+
+                            if ui
+                                .button("▶1")
+                                .on_hover_text(tr("toolbar.next_page"))
+                                .clicked()
+                            {
+                                self.next_page(ctx, true);
+                            }
+                            ui.separator();
+
+                            // --- View Toggles ---
+                            let shift_label = if self.is_shifted {
+                                tr("state.odd_page")
+                            } else {
+                                tr("state.even_page")
+                            };
+                            if ui.button(shift_label).clicked() {
+                                self.change_shifted_mode(ctx);
+                            }
+
+                            if ui
+                                .button("📺")
+                                .on_hover_text(tr("toolbar.fullscreen"))
+                                .clicked()
+                            {
+                                self.is_fullscreen = !self.is_fullscreen;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
+                                    self.is_fullscreen,
+                                ));
+                            }
+                            ui.separator();
+                            if ui.button(tr("toolbar.open_file")).clicked() {
+                                self.open_file_dialog();
+                            }
+
+                            ui.separator();
+                            let auto_scroll_label = if self.auto_scroll_enabled {
+                                tr("toolbar.auto_scroll_stop")
+                            } else {
+                                tr("toolbar.auto_scroll_start")
+                            };
+                            if ui
+                                .add_enabled(
+                                    !self.image_files.is_empty(),
+                                    egui::Button::new(auto_scroll_label),
+                                )
+                                .clicked()
+                            {
+                                self.toggle_auto_scroll(ctx);
+                            }
+
+                            let mut auto_scroll_delay_ms = self.auto_scroll_delay_ms();
+                            let delay_slider = egui::Slider::new(
+                                &mut auto_scroll_delay_ms,
+                                AUTO_SCROLL_MIN_DELAY_MS..=AUTO_SCROLL_MAX_DELAY_MS,
+                            )
+                            .text(tr("toolbar.auto_scroll_delay"));
+                            let delay_response = ui.add_sized(
+                                [180.0 * toolbar_scale, ui.spacing().interact_size.y],
+                                delay_slider,
+                            );
+                            if delay_response.changed() {
+                                self.config.image_delay = auto_scroll_delay_ms;
+                                self.save_settings();
+                                if self.auto_scroll_enabled {
+                                    self.schedule_auto_scroll(ctx);
+                                }
+                            }
+                            delay_response.on_hover_text(tr("toolbar.auto_scroll_delay.tooltip"));
+
+                            if ui
+                                .add_enabled(
+                                    !self.image_files.is_empty(),
+                                    egui::Button::new(tr("toolbar.reload_current_image")),
+                                )
+                                .on_hover_text(tr("toolbar.reload_current_image.tooltip"))
+                                .clicked()
+                            {
+                                self.reload_current_image(ctx);
+                            }
+
+                            ui.separator();
+                            // --- THE SLIDER ---
+                            // We use a 1-based slider for better user experience
+                            let mut page_val = self.current_index + 1;
+                            let max_pages = self.image_files.len().max(1);
+
+                            // ui.available_width() ensures the slider stretches to fill the gap
+                            let slider_width = ui.available_width() / 3.0; // Reserve space for right-side buttons
+
+                            ui.style_mut().spacing.slider_width = slider_width;
+
+                            let slider = ui.add(
+                                egui::Slider::new(&mut page_val, 1..=max_pages)
+                                    .show_value(true)
+                                    .text(format!("/ {}", max_pages)),
+                            );
+                            self.is_scrubbing = slider.dragged();
+                            if slider.changed() {
+                                self.current_index = page_val - 1;
+                                self.reset_buffer();
+                                self.reset_pan();
+                                self.textures = self.load_pair(self.current_index, ctx);
+                            }
+
+                            // --- Hide Button ---
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("❌").on_hover_text(tr("toolbar.hide")).clicked()
+                                    {
+                                        self.config.show_top_bar = false;
+                                    }
+                                    if ui.button("⚙").on_hover_text(tr("settings.title")).clicked()
+                                    {
+                                        self.config.show_settings = !self.config.show_settings;
+                                    }
+                                },
+                            );
                         });
                     });
                 });
+        }
+
+        if self.auto_scroll_enabled {
+            if self.image_files.is_empty() {
+                self.stop_auto_scroll();
+            } else if action_to_run == MangaAction::None {
+                if let Some(next_tick) = self.auto_scroll_next_tick {
+                    let now = Instant::now();
+                    if now >= next_tick {
+                        let before_path = self.zip_path.clone();
+                        let before_index = self.current_index;
+                        self.next_page(ctx, false);
+                        let page_advanced =
+                            self.current_index != before_index || self.zip_path != before_path;
+                        if page_advanced {
+                            self.schedule_auto_scroll(ctx);
+                        } else {
+                            self.stop_auto_scroll();
+                        }
+                    } else {
+                        ctx.request_repaint_after(next_tick - now);
+                    }
+                } else {
+                    self.schedule_auto_scroll(ctx);
+                }
+            } else {
+                self.schedule_auto_scroll(ctx);
+            }
         }
 
         self.render_page_view(ctx, &mut action_to_run);

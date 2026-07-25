@@ -3464,14 +3464,14 @@ impl eframe::App for MangaReader {
                         ui.horizontal(|ui| {
                             // --- Folder Navigation ---
                             if ui
-                                .button("⏮📁")
+                                .button("📁⏮")
                                 .on_hover_text(tr("toolbar.prev_folder"))
                                 .clicked()
                             {
                                 self.prev_folder(ctx);
                             }
                             if ui
-                                .button("📁⏭")
+                                .button("⏭📁")
                                 .on_hover_text(tr("toolbar.next_folder"))
                                 .clicked()
                             {
@@ -3481,14 +3481,14 @@ impl eframe::App for MangaReader {
 
                             // --- File Navigation ---
                             if ui
-                                .button("⏮📦")
+                                .button("📦⏮")
                                 .on_hover_text(tr("toolbar.prev_file"))
                                 .clicked()
                             {
                                 self.prev_zip(ctx);
                             }
                             if ui
-                                .button("📦⏭")
+                                .button("⏭📦")
                                 .on_hover_text(tr("toolbar.next_file"))
                                 .clicked()
                             {

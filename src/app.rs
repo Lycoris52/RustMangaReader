@@ -18,6 +18,8 @@ mod pageview;
 use eframe::egui;
 use egui::Rect;
 use gilrs::{EventType, Gilrs};
+use image::codecs::gif::GifDecoder;
+use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
@@ -100,6 +102,13 @@ enum AnimationDecodeEvent {
     Frame(AnimatedFrame),
     Finished,
     Failed,
+}
+
+#[derive(Clone, Copy)]
+enum AnimatedImageFormat {
+    WebP,
+    Gif,
+    Png,
 }
 
 #[derive(Clone, Copy)]
@@ -488,8 +497,8 @@ pub struct MangaReader {
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
     active_animations: [Option<AnimatedPage>; 2],
     active_animation_keys: [Option<String>; 2],
-    webp_byte_cache: std::collections::HashMap<String, Vec<u8>>,
-    webp_first_frame_cache: std::collections::HashMap<String, AnimatedFrame>,
+    animated_image_byte_cache: std::collections::HashMap<String, Vec<u8>>,
+    animated_image_first_frame_cache: std::collections::HashMap<String, AnimatedFrame>,
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
@@ -554,8 +563,8 @@ impl MangaReader {
             texture_cache: Default::default(),
             active_animations: std::array::from_fn(|_| None),
             active_animation_keys: std::array::from_fn(|_| None),
-            webp_byte_cache: Default::default(),
-            webp_first_frame_cache: Default::default(),
+            animated_image_byte_cache: Default::default(),
+            animated_image_first_frame_cache: Default::default(),
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             auto_scroll_enabled: false,
@@ -622,7 +631,7 @@ impl MangaReader {
 
         self.stop_auto_scroll();
         self.texture_cache.clear();
-        self.clear_webp_animation_cache();
+        self.clear_animated_image_cache();
         self.clear_active_animations();
         self.reset_buffer();
         self.reset_pan();
@@ -648,9 +657,9 @@ impl MangaReader {
         self.active_animation_keys = std::array::from_fn(|_| None);
     }
 
-    fn clear_webp_animation_cache(&mut self) {
-        self.webp_byte_cache.clear();
-        self.webp_first_frame_cache.clear();
+    fn clear_animated_image_cache(&mut self) {
+        self.animated_image_byte_cache.clear();
+        self.animated_image_first_frame_cache.clear();
     }
 
     fn open_file_dialog(&mut self) {
@@ -850,10 +859,17 @@ impl MangaReader {
         self.last_buffered_index = Some(idx);
     }
 
-    fn is_webp_file(filename: &str) -> bool {
-        Path::new(filename)
-            .extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("webp"))
+    fn animated_image_format(filename: &str) -> Option<AnimatedImageFormat> {
+        let extension = Path::new(filename)
+            .extension()?
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "webp" => Some(AnimatedImageFormat::WebP),
+            "gif" => Some(AnimatedImageFormat::Gif),
+            "png" => Some(AnimatedImageFormat::Png),
+            _ => None,
+        }
     }
 
     fn frame_delay(frame: &image::Frame) -> Duration {
@@ -992,57 +1008,88 @@ impl MangaReader {
         None
     }
 
-    fn decode_webp_first_frame(
+    fn decode_animated_image_first_frame(
         &self,
+        format: AnimatedImageFormat,
         buffer: Vec<u8>,
         ctx: &egui::Context,
     ) -> Option<(DynamicImage, Option<AnimatedFrame>, Option<Vec<u8>>)> {
-        let decoder = WebPDecoder::new(Cursor::new(buffer.clone())).ok()?;
-        if decoder.has_animation() {
-            let mut frames = decoder.into_frames();
-            let first_frame = frames.next()?.ok()?;
-            let animated_frame = AnimatedFrame {
-                delay: Self::frame_delay(&first_frame),
-                image: self.color_image_from_dynamic(
-                    DynamicImage::ImageRgba8(first_frame.clone().into_buffer()),
-                    ctx,
-                ),
-            };
-            Some((
-                DynamicImage::ImageRgba8(first_frame.into_buffer()),
-                Some(animated_frame),
-                Some(buffer),
-            ))
-        } else {
-            image::load_from_memory_with_format(&buffer, ImageFormat::WebP)
-                .ok()
-                .map(|img| (img, None, None))
+        match format {
+            AnimatedImageFormat::WebP => {
+                let decoder = WebPDecoder::new(Cursor::new(buffer.clone())).ok()?;
+                if decoder.has_animation() {
+                    let mut frames = decoder.into_frames();
+                    let first_frame = frames.next()?.ok()?;
+                    let animated_frame = AnimatedFrame {
+                        delay: Self::frame_delay(&first_frame),
+                        image: self.color_image_from_dynamic(
+                            DynamicImage::ImageRgba8(first_frame.clone().into_buffer()),
+                            ctx,
+                        ),
+                    };
+                    Some((
+                        DynamicImage::ImageRgba8(first_frame.into_buffer()),
+                        Some(animated_frame),
+                        Some(buffer),
+                    ))
+                } else {
+                    image::load_from_memory_with_format(&buffer, ImageFormat::WebP)
+                        .ok()
+                        .map(|img| (img, None, None))
+                }
+            }
+            AnimatedImageFormat::Gif => {
+                let mut frames = GifDecoder::new(Cursor::new(buffer.clone()))
+                    .ok()?
+                    .into_frames();
+                let first_frame = frames.next()?.ok()?;
+                let animated_frame = AnimatedFrame {
+                    delay: Self::frame_delay(&first_frame),
+                    image: self.color_image_from_dynamic(
+                        DynamicImage::ImageRgba8(first_frame.clone().into_buffer()),
+                        ctx,
+                    ),
+                };
+                Some((
+                    DynamicImage::ImageRgba8(first_frame.into_buffer()),
+                    Some(animated_frame),
+                    Some(buffer),
+                ))
+            }
+            AnimatedImageFormat::Png => {
+                let decoder = PngDecoder::new(Cursor::new(buffer.clone())).ok()?;
+                if decoder.is_apng().ok()? {
+                    let mut frames = decoder.apng().ok()?.into_frames();
+                    let first_frame = frames.next()?.ok()?;
+                    let animated_frame = AnimatedFrame {
+                        delay: Self::frame_delay(&first_frame),
+                        image: self.color_image_from_dynamic(
+                            DynamicImage::ImageRgba8(first_frame.clone().into_buffer()),
+                            ctx,
+                        ),
+                    };
+                    Some((
+                        DynamicImage::ImageRgba8(first_frame.into_buffer()),
+                        Some(animated_frame),
+                        Some(buffer),
+                    ))
+                } else {
+                    image::load_from_memory_with_format(&buffer, ImageFormat::Png)
+                        .ok()
+                        .map(|img| (img, None, None))
+                }
+            }
         }
     }
 
-    fn spawn_webp_animation_worker(
+    fn spawn_animated_image_worker(
+        format: AnimatedImageFormat,
         bytes: Vec<u8>,
         spec: ImageProcessingSpec,
     ) -> Receiver<AnimationDecodeEvent> {
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let Ok(decoder) = WebPDecoder::new(Cursor::new(bytes)) else {
-                let _ = tx.send(AnimationDecodeEvent::Failed);
-                return;
-            };
-            if !decoder.has_animation() {
-                let _ = tx.send(AnimationDecodeEvent::Finished);
-                return;
-            }
-
-            let mut frames = decoder.into_frames();
-            let _ = frames.next();
-
-            for frame_result in frames {
-                let Ok(frame) = frame_result else {
-                    let _ = tx.send(AnimationDecodeEvent::Failed);
-                    return;
-                };
+            let process_frame = |frame: image::Frame| -> bool {
                 let event = AnimationDecodeEvent::Frame(AnimatedFrame {
                     delay: Self::frame_delay(&frame),
                     image: Self::color_image_from_dynamic_with_spec(
@@ -1050,8 +1097,77 @@ impl MangaReader {
                         spec,
                     ),
                 });
-                if tx.send(event).is_err() {
-                    return;
+                tx.send(event).is_ok()
+            };
+
+            match format {
+                AnimatedImageFormat::WebP => {
+                    let Ok(decoder) = WebPDecoder::new(Cursor::new(bytes)) else {
+                        let _ = tx.send(AnimationDecodeEvent::Failed);
+                        return;
+                    };
+                    if !decoder.has_animation() {
+                        let _ = tx.send(AnimationDecodeEvent::Finished);
+                        return;
+                    }
+
+                    let mut frames = decoder.into_frames();
+                    let _ = frames.next();
+                    for frame_result in frames {
+                        let Ok(frame) = frame_result else {
+                            let _ = tx.send(AnimationDecodeEvent::Failed);
+                            return;
+                        };
+                        if !process_frame(frame) {
+                            return;
+                        }
+                    }
+                }
+                AnimatedImageFormat::Gif => {
+                    let Ok(decoder) = GifDecoder::new(Cursor::new(bytes)) else {
+                        let _ = tx.send(AnimationDecodeEvent::Failed);
+                        return;
+                    };
+                    let mut frames = decoder.into_frames();
+                    let _ = frames.next();
+                    for frame_result in frames {
+                        let Ok(frame) = frame_result else {
+                            let _ = tx.send(AnimationDecodeEvent::Failed);
+                            return;
+                        };
+                        if !process_frame(frame) {
+                            return;
+                        }
+                    }
+                }
+                AnimatedImageFormat::Png => {
+                    let Ok(decoder) = PngDecoder::new(Cursor::new(bytes)) else {
+                        let _ = tx.send(AnimationDecodeEvent::Failed);
+                        return;
+                    };
+                    let Ok(is_apng) = decoder.is_apng() else {
+                        let _ = tx.send(AnimationDecodeEvent::Failed);
+                        return;
+                    };
+                    if !is_apng {
+                        let _ = tx.send(AnimationDecodeEvent::Finished);
+                        return;
+                    }
+                    let Ok(apng) = decoder.apng() else {
+                        let _ = tx.send(AnimationDecodeEvent::Failed);
+                        return;
+                    };
+                    let mut frames = apng.into_frames();
+                    let _ = frames.next();
+                    for frame_result in frames {
+                        let Ok(frame) = frame_result else {
+                            let _ = tx.send(AnimationDecodeEvent::Failed);
+                            return;
+                        };
+                        if !process_frame(frame) {
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -1060,12 +1176,12 @@ impl MangaReader {
         rx
     }
 
-    fn cached_or_load_webp_bytes(&mut self, filename: &str) -> Option<Vec<u8>> {
-        if let Some(bytes) = self.webp_byte_cache.get(filename) {
+    fn cached_or_load_animated_image_bytes(&mut self, filename: &str) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.animated_image_byte_cache.get(filename) {
             return Some(bytes.clone());
         }
         let bytes = self.read_source_bytes(filename)?;
-        self.webp_byte_cache
+        self.animated_image_byte_cache
             .insert(filename.to_owned(), bytes.clone());
         Some(bytes)
     }
@@ -1111,7 +1227,7 @@ impl MangaReader {
             let desired_key = if self.textures[slot].is_some() {
                 self.image_files
                     .get(self.current_index + slot)
-                    .filter(|filename| Self::is_webp_file(filename))
+                    .filter(|filename| Self::animated_image_format(filename).is_some())
                     .cloned()
             } else {
                 None
@@ -1127,28 +1243,33 @@ impl MangaReader {
             let Some(filename) = desired_key else {
                 continue;
             };
-            let first_frame = if let Some(frame) = self.webp_first_frame_cache.get(&filename) {
-                frame.clone()
-            } else {
-                let Some(bytes) = self.cached_or_load_webp_bytes(&filename) else {
-                    continue;
-                };
-                let Some((_, maybe_first_frame, maybe_cached_bytes)) =
-                    self.decode_webp_first_frame(bytes, ctx)
-                else {
-                    continue;
-                };
-                if let Some(cached_bytes) = maybe_cached_bytes {
-                    self.webp_byte_cache.insert(filename.clone(), cached_bytes);
-                }
-                let Some(frame) = maybe_first_frame else {
-                    continue;
-                };
-                self.webp_first_frame_cache
-                    .insert(filename.clone(), frame.clone());
-                frame
+            let Some(format) = Self::animated_image_format(&filename) else {
+                continue;
             };
-            let Some(bytes) = self.cached_or_load_webp_bytes(&filename) else {
+            let first_frame =
+                if let Some(frame) = self.animated_image_first_frame_cache.get(&filename) {
+                    frame.clone()
+                } else {
+                    let Some(bytes) = self.cached_or_load_animated_image_bytes(&filename) else {
+                        continue;
+                    };
+                    let Some((_, maybe_first_frame, maybe_cached_bytes)) =
+                        self.decode_animated_image_first_frame(format, bytes, ctx)
+                    else {
+                        continue;
+                    };
+                    if let Some(cached_bytes) = maybe_cached_bytes {
+                        self.animated_image_byte_cache
+                            .insert(filename.clone(), cached_bytes);
+                    }
+                    let Some(frame) = maybe_first_frame else {
+                        continue;
+                    };
+                    self.animated_image_first_frame_cache
+                        .insert(filename.clone(), frame.clone());
+                    frame
+                };
+            let Some(bytes) = self.cached_or_load_animated_image_bytes(&filename) else {
                 continue;
             };
             let animation = AnimatedPage {
@@ -1156,7 +1277,8 @@ impl MangaReader {
                 current_frame: 0,
                 next_frame_at: Instant::now() + first_frame.delay,
                 decode_complete: false,
-                decode_rx: Some(Self::spawn_webp_animation_worker(
+                decode_rx: Some(Self::spawn_animated_image_worker(
+                    format,
                     bytes,
                     self.current_image_processing_spec(ctx),
                 )),
@@ -1188,6 +1310,10 @@ impl MangaReader {
                 continue;
             };
             let received_new_frames = Self::poll_animation_decode(animation);
+
+            if animation.decode_complete && animation.frames.len() <= 1 {
+                continue;
+            }
 
             while now >= animation.next_frame_at {
                 let next_index = animation.current_frame + 1;
@@ -1307,15 +1433,16 @@ impl MangaReader {
                         if self.config.enable_auto_image_byte_fix {
                             buffer = strip_adobe_app14_if_invalid(&buffer);
                         }
-                        if Self::is_webp_file(filename) {
+                        if let Some(format) = Self::animated_image_format(filename) {
                             if let Some((img, first_frame, animated_bytes)) =
-                                self.decode_webp_first_frame(buffer, ctx)
+                                self.decode_animated_image_first_frame(format, buffer, ctx)
                             {
                                 if let Some(frame) = first_frame {
-                                    self.webp_first_frame_cache.insert(filename.clone(), frame);
+                                    self.animated_image_first_frame_cache
+                                        .insert(filename.clone(), frame);
                                 }
                                 if let Some(animated_bytes) = animated_bytes {
-                                    self.webp_byte_cache
+                                    self.animated_image_byte_cache
                                         .insert(filename.clone(), animated_bytes);
                                 }
                                 pair[i] = self.load_texture(img, filename.clone(), ctx);
@@ -1494,7 +1621,7 @@ impl MangaReader {
         } else {
             self.reset_buffer();
             self.texture_cache.clear();
-            self.clear_webp_animation_cache();
+            self.clear_animated_image_cache();
             self.clear_active_animations();
             self.reset_pan();
 

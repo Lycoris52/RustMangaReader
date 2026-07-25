@@ -1,4 +1,4 @@
-﻿use crate::config::{
+use crate::config::{
     AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, KeyConfig, LastPageAction,
     MangaAction, MouseButton, MouseConfig, MouseGesture, PageViewOptions, ResizeMethod, Shortcut,
     SourceMode, UiLanguage,
@@ -28,6 +28,8 @@ use std::fs::{self, File};
 use std::io::Cursor;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -40,6 +42,7 @@ const MOUSE_DRAG_THRESHOLD: f32 = 6.0;
 const SETTINGS_TOGGLE_FADE_DURATION: Duration = Duration::from_secs(1);
 const AUTO_SCROLL_MIN_DELAY_MS: u64 = 200;
 const AUTO_SCROLL_MAX_DELAY_MS: u64 = 30_000;
+const ANIMATION_SCAN_AHEAD_PAGES: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ControlProfile {
@@ -104,11 +107,29 @@ enum AnimationDecodeEvent {
     Failed,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AnimatedImageFormat {
     WebP,
     Gif,
     Png,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnimationScanStatus {
+    Unknown,
+    Animated(AnimatedImageFormat),
+    NotAnimated,
+}
+
+enum AnimationScanEvent {
+    Result {
+        generation: u64,
+        filename: String,
+        status: AnimationScanStatus,
+    },
+    Finished {
+        generation: u64,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -499,6 +520,11 @@ pub struct MangaReader {
     active_animation_keys: [Option<String>; 2],
     animated_image_byte_cache: std::collections::HashMap<String, Vec<u8>>,
     animated_image_first_frame_cache: std::collections::HashMap<String, AnimatedFrame>,
+    animation_scan_anchor: Option<usize>,
+    animation_scan_generation: u64,
+    animation_scan_epoch: Arc<AtomicU64>,
+    animation_scan_rx: Option<Receiver<AnimationScanEvent>>,
+    animation_scan_status: std::collections::HashMap<String, AnimationScanStatus>,
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
@@ -565,6 +591,11 @@ impl MangaReader {
             active_animation_keys: std::array::from_fn(|_| None),
             animated_image_byte_cache: Default::default(),
             animated_image_first_frame_cache: Default::default(),
+            animation_scan_anchor: None,
+            animation_scan_generation: 0,
+            animation_scan_epoch: Arc::new(AtomicU64::new(0)),
+            animation_scan_rx: None,
+            animation_scan_status: Default::default(),
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             auto_scroll_enabled: false,
@@ -632,6 +663,7 @@ impl MangaReader {
         self.stop_auto_scroll();
         self.texture_cache.clear();
         self.clear_animated_image_cache();
+        self.clear_animation_scan_state();
         self.clear_active_animations();
         self.reset_buffer();
         self.reset_pan();
@@ -660,6 +692,19 @@ impl MangaReader {
     fn clear_animated_image_cache(&mut self) {
         self.animated_image_byte_cache.clear();
         self.animated_image_first_frame_cache.clear();
+    }
+
+    fn cancel_animation_scan(&mut self) {
+        self.animation_scan_generation = self.animation_scan_generation.wrapping_add(1);
+        self.animation_scan_epoch
+            .store(self.animation_scan_generation, Ordering::Relaxed);
+        self.animation_scan_rx = None;
+        self.animation_scan_anchor = None;
+    }
+
+    fn clear_animation_scan_state(&mut self) {
+        self.cancel_animation_scan();
+        self.animation_scan_status.clear();
     }
 
     fn open_file_dialog(&mut self) {
@@ -859,7 +904,14 @@ impl MangaReader {
         self.last_buffered_index = Some(idx);
     }
 
-    fn animated_image_format(filename: &str) -> Option<AnimatedImageFormat> {
+    fn animated_image_format(&self, filename: &str) -> Option<AnimatedImageFormat> {
+        if !self.config.enable_animated_images {
+            return None;
+        }
+        Self::animated_image_format_unchecked(filename)
+    }
+
+    fn animated_image_format_unchecked(filename: &str) -> Option<AnimatedImageFormat> {
         let extension = Path::new(filename)
             .extension()?
             .to_string_lossy()
@@ -870,6 +922,55 @@ impl MangaReader {
             "png" => Some(AnimatedImageFormat::Png),
             _ => None,
         }
+    }
+
+    fn read_source_bytes_from(
+        source_mode: SourceMode,
+        source_path: &Path,
+        filename: &str,
+    ) -> Option<Vec<u8>> {
+        if source_mode == SourceMode::Folder {
+            return fs::read(filename).ok();
+        }
+        if source_mode == SourceMode::Zip {
+            let file = File::open(source_path).ok()?;
+            let mut archive = zip::ZipArchive::new(file).ok()?;
+            let mut entry = archive.by_name(filename).ok()?;
+            let mut buffer = Vec::new();
+            entry.read_to_end(&mut buffer).ok()?;
+            return Some(buffer);
+        }
+        if source_mode == SourceMode::Rar {
+            return unrar::Archive::new(source_path)
+                .open_for_processing()
+                .ok()
+                .and_then(|rar_archive| {
+                    let mut cursor = rar_archive.read_header().ok().flatten();
+                    loop {
+                        match cursor {
+                            Some(e) => {
+                                let current_name = e.entry().filename.to_str();
+                                if let Some(name_str) = current_name {
+                                    if name_str == filename {
+                                        break e.read().ok().map(|(bytes, _arc)| bytes);
+                                    }
+                                    cursor = e
+                                        .skip()
+                                        .ok()
+                                        .and_then(|arc| arc.read_header().ok().flatten());
+                                } else {
+                                    cursor = e
+                                        .skip()
+                                        .ok()
+                                        .and_then(|arc| arc.read_header().ok().flatten());
+                                }
+                            }
+                            None => break None,
+                        }
+                    }
+                });
+        }
+        None
     }
 
     fn frame_delay(frame: &image::Frame) -> Duration {
@@ -964,48 +1065,181 @@ impl MangaReader {
 
     fn read_source_bytes(&self, filename: &str) -> Option<Vec<u8>> {
         let source_path = self.zip_path.as_ref()?;
-        if self.source_mode == SourceMode::Folder {
-            return fs::read(filename).ok();
+        Self::read_source_bytes_from(self.source_mode, source_path, filename)
+    }
+
+    fn detect_animation_scan_status(
+        format: AnimatedImageFormat,
+        bytes: &[u8],
+    ) -> Option<AnimationScanStatus> {
+        match format {
+            AnimatedImageFormat::WebP => {
+                let decoder = WebPDecoder::new(Cursor::new(bytes)).ok()?;
+                if decoder.has_animation() {
+                    Some(AnimationScanStatus::Animated(AnimatedImageFormat::WebP))
+                } else {
+                    Some(AnimationScanStatus::NotAnimated)
+                }
+            }
+            AnimatedImageFormat::Gif => {
+                let mut frames = GifDecoder::new(Cursor::new(bytes)).ok()?.into_frames();
+                let _ = frames.next()?.ok()?;
+                match frames.next() {
+                    Some(Ok(_)) => Some(AnimationScanStatus::Animated(AnimatedImageFormat::Gif)),
+                    Some(Err(_)) => None,
+                    None => Some(AnimationScanStatus::NotAnimated),
+                }
+            }
+            AnimatedImageFormat::Png => {
+                let decoder = PngDecoder::new(Cursor::new(bytes)).ok()?;
+                if decoder.is_apng().ok()? {
+                    Some(AnimationScanStatus::Animated(AnimatedImageFormat::Png))
+                } else {
+                    Some(AnimationScanStatus::NotAnimated)
+                }
+            }
         }
-        if self.source_mode == SourceMode::Zip {
-            let file = File::open(source_path).ok()?;
-            let mut archive = zip::ZipArchive::new(file).ok()?;
-            let mut entry = archive.by_name(filename).ok()?;
-            let mut buffer = Vec::new();
-            entry.read_to_end(&mut buffer).ok()?;
-            return Some(buffer);
+    }
+
+    fn spawn_animation_scan_worker(
+        source_mode: SourceMode,
+        source_path: PathBuf,
+        files: Vec<(String, AnimatedImageFormat)>,
+        generation: u64,
+        epoch: Arc<AtomicU64>,
+    ) -> Receiver<AnimationScanEvent> {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            for (filename, format) in files {
+                if epoch.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                let Some(bytes) =
+                    Self::read_source_bytes_from(source_mode, &source_path, &filename)
+                else {
+                    continue;
+                };
+                let Some(status) = Self::detect_animation_scan_status(format, &bytes) else {
+                    continue;
+                };
+                if tx
+                    .send(AnimationScanEvent::Result {
+                        generation,
+                        filename,
+                        status,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+
+            if epoch.load(Ordering::Relaxed) == generation {
+                let _ = tx.send(AnimationScanEvent::Finished { generation });
+            }
+        });
+        rx
+    }
+
+    fn restart_animation_scan_for_current_window(&mut self) {
+        self.cancel_animation_scan();
+
+        if !self.config.enable_animated_images
+            || self.image_files.is_empty()
+            || self.source_mode == SourceMode::Pdf
+        {
+            return;
         }
-        if self.source_mode == SourceMode::Rar {
-            return unrar::Archive::new(source_path)
-                .open_for_processing()
-                .ok()
-                .and_then(|rar_archive| {
-                    let mut cursor = rar_archive.read_header().ok().flatten();
-                    loop {
-                        match cursor {
-                            Some(e) => {
-                                let current_name = e.entry().filename.to_str();
-                                if let Some(name_str) = current_name {
-                                    if name_str == filename {
-                                        break e.read().ok().map(|(bytes, _arc)| bytes);
-                                    }
-                                    cursor = e
-                                        .skip()
-                                        .ok()
-                                        .and_then(|arc| arc.read_header().ok().flatten());
-                                } else {
-                                    cursor = e
-                                        .skip()
-                                        .ok()
-                                        .and_then(|arc| arc.read_header().ok().flatten());
-                                }
-                            }
-                            None => break None,
+
+        let Some(source_path) = self.zip_path.clone() else {
+            return;
+        };
+
+        let files: Vec<(String, AnimatedImageFormat)> = self
+            .image_files
+            .iter()
+            .skip(self.current_index)
+            .take(ANIMATION_SCAN_AHEAD_PAGES + 1)
+            .filter_map(|filename| {
+                if !matches!(
+                    self.animation_scan_status.get(filename).copied(),
+                    Some(AnimationScanStatus::Animated(_)) | Some(AnimationScanStatus::NotAnimated)
+                ) {
+                    Self::animated_image_format_unchecked(filename)
+                        .map(|format| (filename.clone(), format))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        self.animation_scan_anchor = Some(self.current_index);
+        if files.is_empty() {
+            return;
+        }
+
+        let generation = self.animation_scan_generation;
+        self.animation_scan_rx = Some(Self::spawn_animation_scan_worker(
+            self.source_mode,
+            source_path,
+            files,
+            generation,
+            Arc::clone(&self.animation_scan_epoch),
+        ));
+    }
+
+    fn poll_animation_scan(&mut self, ctx: &egui::Context) {
+        let mut received_any = false;
+        let mut finished = false;
+
+        if let Some(rx) = self.animation_scan_rx.as_ref() {
+            loop {
+                match rx.try_recv() {
+                    Ok(AnimationScanEvent::Result {
+                        generation,
+                        filename,
+                        status,
+                    }) => {
+                        if generation == self.animation_scan_generation {
+                            self.animation_scan_status.insert(filename, status);
+                            received_any = true;
                         }
                     }
-                });
+                    Ok(AnimationScanEvent::Finished { generation }) => {
+                        if generation == self.animation_scan_generation {
+                            finished = true;
+                        }
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
         }
-        None
+
+        if finished {
+            self.animation_scan_rx = None;
+        }
+
+        if received_any {
+            ctx.request_repaint();
+        }
+    }
+
+    fn sync_animation_scan(&mut self, ctx: &egui::Context) {
+        self.poll_animation_scan(ctx);
+
+        if !self.config.enable_animated_images || self.image_files.is_empty() {
+            self.cancel_animation_scan();
+            return;
+        }
+
+        if self.animation_scan_anchor != Some(self.current_index) {
+            self.restart_animation_scan_for_current_window();
+        }
     }
 
     fn decode_animated_image_first_frame(
@@ -1223,17 +1457,30 @@ impl MangaReader {
             return;
         }
 
+        if !self.config.enable_animated_images {
+            self.clear_active_animations();
+            return;
+        }
+
         for slot in 0..2 {
             let desired_key = if self.textures[slot].is_some() {
                 self.image_files
                     .get(self.current_index + slot)
-                    .filter(|filename| Self::animated_image_format(filename).is_some())
+                    .filter(|filename| Self::animated_image_format_unchecked(filename).is_some())
                     .cloned()
             } else {
                 None
             };
 
-            if self.active_animation_keys[slot] == desired_key {
+            let desired_status = desired_key
+                .as_ref()
+                .and_then(|filename| self.animation_scan_status.get(filename).copied())
+                .unwrap_or(AnimationScanStatus::Unknown);
+
+            if self.active_animation_keys[slot] == desired_key
+                && !(matches!(desired_status, AnimationScanStatus::Animated(_))
+                    && self.active_animations[slot].is_none())
+            {
                 continue;
             }
 
@@ -1243,7 +1490,7 @@ impl MangaReader {
             let Some(filename) = desired_key else {
                 continue;
             };
-            let Some(format) = Self::animated_image_format(&filename) else {
+            let AnimationScanStatus::Animated(format) = desired_status else {
                 continue;
             };
             let first_frame =
@@ -1433,13 +1680,31 @@ impl MangaReader {
                         if self.config.enable_auto_image_byte_fix {
                             buffer = strip_adobe_app14_if_invalid(&buffer);
                         }
-                        if let Some(format) = Self::animated_image_format(filename) {
+                        let scan_status = self
+                            .animation_scan_status
+                            .get(filename)
+                            .copied()
+                            .unwrap_or(AnimationScanStatus::Unknown);
+                        let animated_format = match scan_status {
+                            AnimationScanStatus::Animated(format) => Some(format),
+                            AnimationScanStatus::NotAnimated => None,
+                            AnimationScanStatus::Unknown => self.animated_image_format(filename),
+                        };
+
+                        if let Some(format) = animated_format {
                             if let Some((img, first_frame, animated_bytes)) =
                                 self.decode_animated_image_first_frame(format, buffer, ctx)
                             {
                                 if let Some(frame) = first_frame {
+                                    self.animation_scan_status.insert(
+                                        filename.clone(),
+                                        AnimationScanStatus::Animated(format),
+                                    );
                                     self.animated_image_first_frame_cache
                                         .insert(filename.clone(), frame);
+                                } else {
+                                    self.animation_scan_status
+                                        .insert(filename.clone(), AnimationScanStatus::NotAnimated);
                                 }
                                 if let Some(animated_bytes) = animated_bytes {
                                     self.animated_image_byte_cache
@@ -1622,6 +1887,7 @@ impl MangaReader {
             self.reset_buffer();
             self.texture_cache.clear();
             self.clear_animated_image_cache();
+            self.clear_animation_scan_state();
             self.clear_active_animations();
             self.reset_pan();
 
@@ -1643,6 +1909,7 @@ impl MangaReader {
                     Some((file_name.to_string_lossy().to_string(), Instant::now()));
             }
 
+            self.restart_animation_scan_for_current_window();
             self.textures = self.load_pair(self.current_index, ctx);
             self.reset_top_down_buffer();
             if self.config.page_view_options == PageViewOptions::TopDown {
@@ -2269,6 +2536,7 @@ impl eframe::App for MangaReader {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         set_language(self.config.language);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(tr("app.title").to_owned()));
+        self.sync_animation_scan(ctx);
         self.update_active_animations(ctx);
 
         // load file if it is dropped on screen
@@ -2822,6 +3090,22 @@ impl eframe::App for MangaReader {
                                     tr("settings.single_file_cache"),
                                 )
                                 .on_hover_text(tr("settings.single_file_cache.tooltip"));
+                                if ui
+                                    .checkbox(
+                                        &mut self.config.enable_animated_images,
+                                        tr("settings.animated_images"),
+                                    )
+                                    .on_hover_text(tr("settings.animated_images.tooltip"))
+                                    .changed()
+                                {
+                                    self.clear_animated_image_cache();
+                                    self.clear_animation_scan_state();
+                                    self.clear_active_animations();
+                                    if self.config.enable_animated_images {
+                                        self.restart_animation_scan_for_current_window();
+                                    }
+                                    self.save_settings();
+                                }
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
                                     self.config.settings_width * 0.9 - 190.0;
@@ -3222,7 +3506,11 @@ impl eframe::App for MangaReader {
                             ui.separator();
 
                             // --- View Toggles ---
-                            let shift_label = if self.is_shifted { tr("toolbar.odd") } else { tr("toolbar.even") };
+                            let shift_label = if self.is_shifted {
+                                tr("toolbar.odd")
+                            } else {
+                                tr("toolbar.even")
+                            };
                             let shift_tooltip = if self.is_shifted {
                                 tr("state.odd_page")
                             } else {
@@ -3247,7 +3535,11 @@ impl eframe::App for MangaReader {
                                 ));
                             }
                             ui.separator();
-                            if ui.button("📂").on_hover_text(tr("toolbar.open_file")).clicked() {
+                            if ui
+                                .button("📂")
+                                .on_hover_text(tr("toolbar.open_file"))
+                                .clicked()
+                            {
                                 self.open_file_dialog();
                             }
 

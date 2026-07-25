@@ -56,6 +56,8 @@
   "settings.auto_image_fix.tooltip": "形式が壊れた画像を修復できる場合がありますが、読み込み速度が約10%低下します。",
   "settings.single_file_cache": "単一ファイル内キャッシュを有効化",
   "settings.single_file_cache.tooltip": "現在のzip内で一度読み込んだ画像をキャッシュします。次のzipを開くとキャッシュは消去されます。",
+  "settings.animated_images": "WebP/GIF/PNGのアニメーション再生を有効にする",
+  "settings.animated_images.tooltip": "WebP、GIF、PNGのアニメーションを再生します。この設定をオフにすると静止画像として読み込まれるようになり、ページの読み込み速度が向上します。",
   "settings.image_delay": "画像切替遅延 (ms)",
   "settings.image_delay.tooltip": "次の画像を表示するまでの待機時間です。次へ/前へを押し続けるときに有効です。",
   "settings.top_down_slide_speed": "スライド操作速度",

@@ -454,6 +454,10 @@ fn default_top_toolbar_scale() -> f32 {
     1.0
 }
 
+fn default_enable_animated_images() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AppSettings {
     pub resize_method: ResizeMethod,
@@ -472,6 +476,8 @@ pub struct AppSettings {
     pub auto_hide_settings_button: bool,
     pub transparency_support: bool,
     pub enable_single_file_caching: bool,
+    #[serde(default = "default_enable_animated_images")]
+    pub enable_animated_images: bool,
     pub image_delay: u64,
     pub keys: KeyConfig,
     #[serde(default = "default_top_down_keys")]
@@ -519,6 +525,7 @@ impl Default for AppSettings {
             auto_hide_settings_button: true,
             transparency_support: false,
             enable_single_file_caching: true,
+            enable_animated_images: default_enable_animated_images(),
             image_delay: 0,
             keys: KeyConfig::default(),
             top_down_keys: KeyConfig::top_down_default(),

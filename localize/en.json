@@ -56,6 +56,8 @@
   "settings.auto_image_fix.tooltip": "Some images come with malformed format, enable this will sometimes fix the image, but will sacrifice image load speed by about 10%.",
   "settings.single_file_cache": "Enable caching on single file",
   "settings.single_file_cache.tooltip": "Cached image files already loaded on a single zip file. Cache will be cleared after loading the next zip.",
+  "settings.animated_images": "Enable WebP/GIF/APNG animation",
+  "settings.animated_images.tooltip": "Disable animated playback for WebP, GIF, and animated PNG. Turning this off restores the static image path and improves page load speed.",
   "settings.image_delay": "Image Delay (ms)",
   "settings.image_delay.tooltip": "Delay time before showing the next image. Useful when holding next/previous image buttons.",
   "settings.top_down_slide_speed": "Slide Action Speed",

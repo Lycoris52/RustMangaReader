@@ -16,14 +16,17 @@ mod overlay;
 #[path = "pageview.rs"]
 mod pageview;
 use eframe::egui;
-use egui::{Align, Rect};
+use egui::Rect;
 use gilrs::{EventType, Gilrs};
-use image::{DynamicImage, ImageFormat};
+use image::codecs::webp::WebPDecoder;
+use image::{AnimationDecoder, DynamicImage, ImageFormat};
 use pdfium_render::prelude::Pixels;
 use std::env;
 use std::fs::{self, File};
+use std::io::Cursor;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE;
@@ -85,6 +88,35 @@ enum BindingTarget {
         profile: ControlProfile,
         action: String,
     },
+}
+
+#[derive(Clone)]
+struct AnimatedFrame {
+    image: egui::ColorImage,
+    delay: Duration,
+}
+
+enum AnimationDecodeEvent {
+    Frame(AnimatedFrame),
+    Finished,
+    Failed,
+}
+
+#[derive(Clone, Copy)]
+struct ImageProcessingSpec {
+    resize_method: ResizeMethod,
+    image_sizing_mode: ImageSizingMode,
+    transparency_support: bool,
+    zoom_factor: f32,
+    container_size: [f32; 2],
+}
+
+struct AnimatedPage {
+    frames: Vec<AnimatedFrame>,
+    current_frame: usize,
+    next_frame_at: Instant,
+    decode_complete: bool,
+    decode_rx: Option<Receiver<AnimationDecodeEvent>>,
 }
 
 fn render_binding_button(
@@ -454,6 +486,10 @@ pub struct MangaReader {
     config: AppSettings,
     binding_action: Option<BindingTarget>,
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    active_animations: [Option<AnimatedPage>; 2],
+    active_animation_keys: [Option<String>; 2],
+    webp_byte_cache: std::collections::HashMap<String, Vec<u8>>,
+    webp_first_frame_cache: std::collections::HashMap<String, AnimatedFrame>,
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
@@ -516,6 +552,10 @@ impl MangaReader {
             config, // Store the loaded config here
             binding_action: None,
             texture_cache: Default::default(),
+            active_animations: std::array::from_fn(|_| None),
+            active_animation_keys: std::array::from_fn(|_| None),
+            webp_byte_cache: Default::default(),
+            webp_first_frame_cache: Default::default(),
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             auto_scroll_enabled: false,
@@ -582,6 +622,8 @@ impl MangaReader {
 
         self.stop_auto_scroll();
         self.texture_cache.clear();
+        self.clear_webp_animation_cache();
+        self.clear_active_animations();
         self.reset_buffer();
         self.reset_pan();
         self.last_buffered_index = None;
@@ -599,6 +641,16 @@ impl MangaReader {
 
         self.page_indicator_time = Some(Instant::now());
         ctx.request_repaint();
+    }
+
+    fn clear_active_animations(&mut self) {
+        self.active_animations = std::array::from_fn(|_| None);
+        self.active_animation_keys = std::array::from_fn(|_| None);
+    }
+
+    fn clear_webp_animation_cache(&mut self) {
+        self.webp_byte_cache.clear();
+        self.webp_first_frame_cache.clear();
     }
 
     fn open_file_dialog(&mut self) {
@@ -798,6 +850,379 @@ impl MangaReader {
         self.last_buffered_index = Some(idx);
     }
 
+    fn is_webp_file(filename: &str) -> bool {
+        Path::new(filename)
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("webp"))
+    }
+
+    fn frame_delay(frame: &image::Frame) -> Duration {
+        let delay = Duration::from(frame.delay());
+        if delay.is_zero() {
+            Duration::from_millis(100)
+        } else {
+            delay
+        }
+    }
+
+    fn current_image_processing_spec(&self, ctx: &egui::Context) -> ImageProcessingSpec {
+        let container_size = self.effective_image_container_size(ctx);
+        ImageProcessingSpec {
+            resize_method: self.config.resize_method,
+            image_sizing_mode: self.config.image_sizing_mode,
+            transparency_support: self.config.transparency_support,
+            zoom_factor: self.zoom_factor,
+            container_size: [container_size.x, container_size.y],
+        }
+    }
+
+    fn color_image_from_dynamic_with_spec(
+        img: DynamicImage,
+        spec: ImageProcessingSpec,
+    ) -> egui::ColorImage {
+        let resize_start = Instant::now();
+        let filter = spec.resize_method.to_filter();
+        let processed_img = if let Some(filter_type) = filter {
+            if spec.image_sizing_mode == ImageSizingMode::OriginalSize {
+                img
+            } else {
+                let container_size = egui::vec2(spec.container_size[0], spec.container_size[1]);
+                let aspect_ratio = img.width() as f32 / img.height() as f32;
+                let factor = if (spec.zoom_factor - 1.0).abs() > 0.01 {
+                    3
+                } else {
+                    1
+                };
+                let (target_w, target_h) = match spec.image_sizing_mode {
+                    ImageSizingMode::FitHeight => {
+                        let target_h = container_size.y.max(1.0) as u32;
+                        let target_w = (target_h as f32 * aspect_ratio) as u32;
+                        (target_w, target_h)
+                    }
+                    ImageSizingMode::FitWidth => {
+                        let target_w = container_size.x.max(1.0) as u32;
+                        let target_h = (target_w as f32 / aspect_ratio) as u32;
+                        (target_w, target_h)
+                    }
+                    ImageSizingMode::OriginalSize => unreachable!(),
+                };
+                img.resize(
+                    target_w.max(1) * factor,
+                    target_h.max(1) * factor,
+                    filter_type,
+                )
+            }
+        } else {
+            img
+        };
+
+        let _resize_time = resize_start.elapsed();
+        let process_start = Instant::now();
+        let size = [processed_img.width() as _, processed_img.height() as _];
+        let color_img = if spec.transparency_support {
+            egui::ColorImage::from_rgba_unmultiplied(
+                size,
+                processed_img.to_rgba8().as_flat_samples().as_slice(),
+            )
+        } else {
+            egui::ColorImage::from_rgb(size, processed_img.to_rgb8().as_raw())
+        };
+        let _process_time = process_start.elapsed();
+
+        #[cfg(debug_assertions)]
+        {
+            println!("----------------------------------");
+            println!("resize_time: {:?}", _resize_time);
+            println!("process_time: {:?}", _process_time);
+            println!("total: {:?}", _process_time + _resize_time);
+            println!("filter: {:?}", filter);
+            println!("----------------------------------");
+        }
+
+        color_img
+    }
+
+    fn color_image_from_dynamic(&self, img: DynamicImage, ctx: &egui::Context) -> egui::ColorImage {
+        Self::color_image_from_dynamic_with_spec(img, self.current_image_processing_spec(ctx))
+    }
+
+    fn read_source_bytes(&self, filename: &str) -> Option<Vec<u8>> {
+        let source_path = self.zip_path.as_ref()?;
+        if self.source_mode == SourceMode::Folder {
+            return fs::read(filename).ok();
+        }
+        if self.source_mode == SourceMode::Zip {
+            let file = File::open(source_path).ok()?;
+            let mut archive = zip::ZipArchive::new(file).ok()?;
+            let mut entry = archive.by_name(filename).ok()?;
+            let mut buffer = Vec::new();
+            entry.read_to_end(&mut buffer).ok()?;
+            return Some(buffer);
+        }
+        if self.source_mode == SourceMode::Rar {
+            return unrar::Archive::new(source_path)
+                .open_for_processing()
+                .ok()
+                .and_then(|rar_archive| {
+                    let mut cursor = rar_archive.read_header().ok().flatten();
+                    loop {
+                        match cursor {
+                            Some(e) => {
+                                let current_name = e.entry().filename.to_str();
+                                if let Some(name_str) = current_name {
+                                    if name_str == filename {
+                                        break e.read().ok().map(|(bytes, _arc)| bytes);
+                                    }
+                                    cursor = e
+                                        .skip()
+                                        .ok()
+                                        .and_then(|arc| arc.read_header().ok().flatten());
+                                } else {
+                                    cursor = e
+                                        .skip()
+                                        .ok()
+                                        .and_then(|arc| arc.read_header().ok().flatten());
+                                }
+                            }
+                            None => break None,
+                        }
+                    }
+                });
+        }
+        None
+    }
+
+    fn decode_webp_first_frame(
+        &self,
+        buffer: Vec<u8>,
+        ctx: &egui::Context,
+    ) -> Option<(DynamicImage, Option<AnimatedFrame>, Option<Vec<u8>>)> {
+        let decoder = WebPDecoder::new(Cursor::new(buffer.clone())).ok()?;
+        if decoder.has_animation() {
+            let mut frames = decoder.into_frames();
+            let first_frame = frames.next()?.ok()?;
+            let animated_frame = AnimatedFrame {
+                delay: Self::frame_delay(&first_frame),
+                image: self.color_image_from_dynamic(
+                    DynamicImage::ImageRgba8(first_frame.clone().into_buffer()),
+                    ctx,
+                ),
+            };
+            Some((
+                DynamicImage::ImageRgba8(first_frame.into_buffer()),
+                Some(animated_frame),
+                Some(buffer),
+            ))
+        } else {
+            image::load_from_memory_with_format(&buffer, ImageFormat::WebP)
+                .ok()
+                .map(|img| (img, None, None))
+        }
+    }
+
+    fn spawn_webp_animation_worker(
+        bytes: Vec<u8>,
+        spec: ImageProcessingSpec,
+    ) -> Receiver<AnimationDecodeEvent> {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let Ok(decoder) = WebPDecoder::new(Cursor::new(bytes)) else {
+                let _ = tx.send(AnimationDecodeEvent::Failed);
+                return;
+            };
+            if !decoder.has_animation() {
+                let _ = tx.send(AnimationDecodeEvent::Finished);
+                return;
+            }
+
+            let mut frames = decoder.into_frames();
+            let _ = frames.next();
+
+            for frame_result in frames {
+                let Ok(frame) = frame_result else {
+                    let _ = tx.send(AnimationDecodeEvent::Failed);
+                    return;
+                };
+                let event = AnimationDecodeEvent::Frame(AnimatedFrame {
+                    delay: Self::frame_delay(&frame),
+                    image: Self::color_image_from_dynamic_with_spec(
+                        DynamicImage::ImageRgba8(frame.into_buffer()),
+                        spec,
+                    ),
+                });
+                if tx.send(event).is_err() {
+                    return;
+                }
+            }
+
+            let _ = tx.send(AnimationDecodeEvent::Finished);
+        });
+        rx
+    }
+
+    fn cached_or_load_webp_bytes(&mut self, filename: &str) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.webp_byte_cache.get(filename) {
+            return Some(bytes.clone());
+        }
+        let bytes = self.read_source_bytes(filename)?;
+        self.webp_byte_cache
+            .insert(filename.to_owned(), bytes.clone());
+        Some(bytes)
+    }
+
+    fn poll_animation_decode(animation: &mut AnimatedPage) -> bool {
+        let mut received_any = false;
+        let Some(rx) = animation.decode_rx.as_ref() else {
+            return false;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(AnimationDecodeEvent::Frame(frame)) => {
+                    animation.frames.push(frame);
+                    received_any = true;
+                }
+                Ok(AnimationDecodeEvent::Finished) => {
+                    animation.decode_complete = true;
+                    animation.decode_rx = None;
+                    return true;
+                }
+                Ok(AnimationDecodeEvent::Failed) => {
+                    animation.decode_complete = true;
+                    animation.decode_rx = None;
+                    return received_any;
+                }
+                Err(TryRecvError::Empty) => return received_any,
+                Err(TryRecvError::Disconnected) => {
+                    animation.decode_complete = true;
+                    animation.decode_rx = None;
+                    return received_any;
+                }
+            }
+        }
+    }
+
+    fn ensure_active_animations(&mut self, ctx: &egui::Context) {
+        if self.config.page_view_options == PageViewOptions::TopDown {
+            self.clear_active_animations();
+            return;
+        }
+
+        for slot in 0..2 {
+            let desired_key = if self.textures[slot].is_some() {
+                self.image_files
+                    .get(self.current_index + slot)
+                    .filter(|filename| Self::is_webp_file(filename))
+                    .cloned()
+            } else {
+                None
+            };
+
+            if self.active_animation_keys[slot] == desired_key {
+                continue;
+            }
+
+            self.active_animation_keys[slot] = desired_key.clone();
+            self.active_animations[slot] = None;
+
+            let Some(filename) = desired_key else {
+                continue;
+            };
+            let first_frame = if let Some(frame) = self.webp_first_frame_cache.get(&filename) {
+                frame.clone()
+            } else {
+                let Some(bytes) = self.cached_or_load_webp_bytes(&filename) else {
+                    continue;
+                };
+                let Some((_, maybe_first_frame, maybe_cached_bytes)) =
+                    self.decode_webp_first_frame(bytes, ctx)
+                else {
+                    continue;
+                };
+                if let Some(cached_bytes) = maybe_cached_bytes {
+                    self.webp_byte_cache.insert(filename.clone(), cached_bytes);
+                }
+                let Some(frame) = maybe_first_frame else {
+                    continue;
+                };
+                self.webp_first_frame_cache
+                    .insert(filename.clone(), frame.clone());
+                frame
+            };
+            let Some(bytes) = self.cached_or_load_webp_bytes(&filename) else {
+                continue;
+            };
+            let animation = AnimatedPage {
+                frames: vec![first_frame.clone()],
+                current_frame: 0,
+                next_frame_at: Instant::now() + first_frame.delay,
+                decode_complete: false,
+                decode_rx: Some(Self::spawn_webp_animation_worker(
+                    bytes,
+                    self.current_image_processing_spec(ctx),
+                )),
+            };
+            if let Some(texture) = self.textures[slot].as_mut() {
+                texture.set(first_frame.image.clone(), egui::TextureOptions::LINEAR);
+                self.active_animations[slot] = Some(animation);
+            }
+        }
+    }
+
+    fn update_active_animations(&mut self, ctx: &egui::Context) {
+        self.ensure_active_animations(ctx);
+
+        let now = Instant::now();
+        let mut next_repaint_after: Option<Duration> = None;
+
+        for slot in 0..2 {
+            if self.textures[slot].is_none() {
+                self.active_animations[slot] = None;
+                self.active_animation_keys[slot] = None;
+                continue;
+            }
+
+            let Some(animation) = self.active_animations[slot].as_mut() else {
+                continue;
+            };
+            let Some(texture) = self.textures[slot].as_mut() else {
+                continue;
+            };
+            let received_new_frames = Self::poll_animation_decode(animation);
+
+            while now >= animation.next_frame_at {
+                let next_index = animation.current_frame + 1;
+                if next_index < animation.frames.len() {
+                    animation.current_frame = next_index;
+                } else if animation.decode_complete && !animation.frames.is_empty() {
+                    animation.current_frame = 0;
+                } else {
+                    break;
+                }
+
+                let frame = &animation.frames[animation.current_frame];
+                texture.set(frame.image.clone(), egui::TextureOptions::LINEAR);
+                animation.next_frame_at = now + frame.delay;
+            }
+
+            let repaint_after = if animation.current_frame + 1 < animation.frames.len()
+                || animation.decode_complete
+            {
+                animation.next_frame_at.saturating_duration_since(now)
+            } else {
+                Duration::from_millis(if received_new_frames { 1 } else { 16 })
+            };
+            next_repaint_after = Some(
+                next_repaint_after
+                    .map(|current| current.min(repaint_after))
+                    .unwrap_or(repaint_after),
+            );
+        }
+
+        if let Some(repaint_after) = next_repaint_after {
+            ctx.request_repaint_after(repaint_after.max(Duration::from_millis(1)));
+        }
+    }
+
     fn load_pair(
         &mut self,
         start_idx: usize,
@@ -882,21 +1307,37 @@ impl MangaReader {
                         if self.config.enable_auto_image_byte_fix {
                             buffer = strip_adobe_app14_if_invalid(&buffer);
                         }
-                        match image::guess_format(&buffer) {
-                            Ok(format) => {
-                                if let Ok(img) =
-                                    image::load_from_memory_with_format(&buffer, format)
-                                {
-                                    pair[i] = self.load_texture(img, filename.clone(), ctx);
+                        if Self::is_webp_file(filename) {
+                            if let Some((img, first_frame, animated_bytes)) =
+                                self.decode_webp_first_frame(buffer, ctx)
+                            {
+                                if let Some(frame) = first_frame {
+                                    self.webp_first_frame_cache.insert(filename.clone(), frame);
                                 }
+                                if let Some(animated_bytes) = animated_bytes {
+                                    self.webp_byte_cache
+                                        .insert(filename.clone(), animated_bytes);
+                                }
+                                pair[i] = self.load_texture(img, filename.clone(), ctx);
                             }
-                            Err(_) => {
-                                // Fallback: If guessing fails, try loading as TGA
-                                // since TGA is often the one that fails detection.
-                                if let Ok(img) =
-                                    image::load_from_memory_with_format(&buffer, ImageFormat::Tga)
-                                {
-                                    pair[i] = self.load_texture(img, filename.clone(), ctx);
+                        } else {
+                            match image::guess_format(&buffer) {
+                                Ok(format) => {
+                                    if let Ok(img) =
+                                        image::load_from_memory_with_format(&buffer, format)
+                                    {
+                                        pair[i] = self.load_texture(img, filename.clone(), ctx);
+                                    }
+                                }
+                                Err(_) => {
+                                    // Fallback: If guessing fails, try loading as TGA
+                                    // since TGA is often the one that fails detection.
+                                    if let Ok(img) = image::load_from_memory_with_format(
+                                        &buffer,
+                                        ImageFormat::Tga,
+                                    ) {
+                                        pair[i] = self.load_texture(img, filename.clone(), ctx);
+                                    }
                                 }
                             }
                         }
@@ -937,67 +1378,7 @@ impl MangaReader {
         cache_name: String,
         ctx: &egui::Context,
     ) -> Option<egui::TextureHandle> {
-        let resize_start = Instant::now();
-        let filter = self.config.resize_method.to_filter();
-        let top_down_fit_height_noop = self.config.page_view_options == PageViewOptions::TopDown
-            && self.config.image_sizing_mode == ImageSizingMode::FitHeight;
-        let processed_img = if top_down_fit_height_noop {
-            img
-        } else if let Some(filter_type) = filter {
-            if self.config.image_sizing_mode == ImageSizingMode::OriginalSize {
-                img
-            } else {
-                let container_size = self.effective_image_container_size(ctx);
-                let aspect_ratio = img.width() as f32 / img.height() as f32;
-                let factor = if self.zoom_factor != 1.0 { 3 } else { 1 };
-                let (target_w, target_h) = match self.config.image_sizing_mode {
-                    ImageSizingMode::FitHeight => {
-                        let target_h = container_size.y.max(1.0) as u32;
-                        let target_w = (target_h as f32 * aspect_ratio) as u32;
-                        (target_w, target_h)
-                    }
-                    ImageSizingMode::FitWidth => {
-                        let target_w = container_size.x.max(1.0) as u32;
-                        let target_h = (target_w as f32 / aspect_ratio) as u32;
-                        (target_w, target_h)
-                    }
-                    ImageSizingMode::OriginalSize => unreachable!(),
-                };
-                img.resize(
-                    target_w.max(1) * factor,
-                    target_h.max(1) * factor,
-                    filter_type,
-                )
-            }
-        } else {
-            img // No resizing needed, return original
-        };
-
-        let _resize_time = resize_start.elapsed();
-        let process_start = Instant::now();
-
-        let size = [processed_img.width() as _, processed_img.height() as _];
-        let color_img = if self.config.transparency_support {
-            egui::ColorImage::from_rgba_unmultiplied(
-                size,
-                processed_img.to_rgba8().as_flat_samples().as_slice(),
-            )
-        } else {
-            egui::ColorImage::from_rgb(size, processed_img.to_rgb8().as_raw())
-        };
-
-        let _process_time = process_start.elapsed();
-
-        #[cfg(debug_assertions)]
-        {
-            println!("----------------------------------");
-            println!("resize_time: {:?}", _resize_time);
-            println!("process_time: {:?}", _process_time);
-            println!("total: {:?}", _process_time + _resize_time);
-            println!("filter: {:?}", filter);
-            println!("----------------------------------");
-        }
-
+        let color_img = self.color_image_from_dynamic(img, ctx);
         let handle = ctx.load_texture(
             &cache_name.clone(),
             color_img,
@@ -1113,6 +1494,8 @@ impl MangaReader {
         } else {
             self.reset_buffer();
             self.texture_cache.clear();
+            self.clear_webp_animation_cache();
+            self.clear_active_animations();
             self.reset_pan();
 
             // If we opened a specific image, find its index in the sorted list
@@ -1345,6 +1728,7 @@ impl MangaReader {
         self.buffer_next = [None, None];
         self.top_down_textures.clear();
         self.top_down_scroll_offset = 0.0;
+        self.clear_active_animations();
     }
 
     fn get_mouse_action(&self, gesture: MouseGesture) -> MangaAction {
@@ -1758,6 +2142,7 @@ impl eframe::App for MangaReader {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         set_language(self.config.language);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(tr("app.title").to_owned()));
+        self.update_active_animations(ctx);
 
         // load file if it is dropped on screen
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());

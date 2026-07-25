@@ -1,4 +1,4 @@
-use crate::config::{
+﻿use crate::config::{
     AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, KeyConfig, LastPageAction,
     MangaAction, MouseButton, MouseConfig, MouseGesture, PageViewOptions, ResizeMethod, Shortcut,
     SourceMode, UiLanguage,
@@ -3572,7 +3572,7 @@ impl eframe::App for MangaReader {
                             }
 
                             if ui
-                                .button("📺")
+                                .button(if self.is_fullscreen { "🗗" } else { "⛶" })
                                 .on_hover_text(tr("toolbar.fullscreen"))
                                 .clicked()
                             {

@@ -1,4 +1,4 @@
-use crate::config::{
+﻿use crate::config::{
     AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, KeyConfig, LastPageAction,
     MangaAction, MouseButton, MouseConfig, MouseGesture, PageViewOptions, ResizeMethod, Shortcut,
     SourceMode, UiLanguage,
@@ -3133,7 +3133,7 @@ impl eframe::App for MangaReader {
                         ui.horizontal(|ui| {
                             // --- Folder Navigation ---
                             if ui
-                                .button("📁⏮")
+                                .button("⏮📁")
                                 .on_hover_text(tr("toolbar.prev_folder"))
                                 .clicked()
                             {
@@ -3150,7 +3150,7 @@ impl eframe::App for MangaReader {
 
                             // --- File Navigation ---
                             if ui
-                                .button("📦⏮")
+                                .button("⏮📦")
                                 .on_hover_text(tr("toolbar.prev_file"))
                                 .clicked()
                             {
@@ -3222,12 +3222,17 @@ impl eframe::App for MangaReader {
                             ui.separator();
 
                             // --- View Toggles ---
-                            let shift_label = if self.is_shifted {
+                            let shift_label = if self.is_shifted { tr("toolbar.odd") } else { tr("toolbar.even") };
+                            let shift_tooltip = if self.is_shifted {
                                 tr("state.odd_page")
                             } else {
                                 tr("state.even_page")
                             };
-                            if ui.button(shift_label).clicked() {
+                            if ui
+                                .button(shift_label)
+                                .on_hover_text(shift_tooltip)
+                                .clicked()
+                            {
                                 self.change_shifted_mode(ctx);
                             }
 
@@ -3242,12 +3247,17 @@ impl eframe::App for MangaReader {
                                 ));
                             }
                             ui.separator();
-                            if ui.button(tr("toolbar.open_file")).clicked() {
+                            if ui.button("📂").on_hover_text(tr("toolbar.open_file")).clicked() {
                                 self.open_file_dialog();
                             }
 
                             ui.separator();
                             let auto_scroll_label = if self.auto_scroll_enabled {
+                                "⏸"
+                            } else {
+                                "▶"
+                            };
+                            let auto_scroll_tooltip = if self.auto_scroll_enabled {
                                 tr("toolbar.auto_scroll_stop")
                             } else {
                                 tr("toolbar.auto_scroll_start")
@@ -3257,6 +3267,7 @@ impl eframe::App for MangaReader {
                                     !self.image_files.is_empty(),
                                     egui::Button::new(auto_scroll_label),
                                 )
+                                .on_hover_text(auto_scroll_tooltip)
                                 .clicked()
                             {
                                 self.toggle_auto_scroll(ctx);
@@ -3282,10 +3293,7 @@ impl eframe::App for MangaReader {
                             delay_response.on_hover_text(tr("toolbar.auto_scroll_delay.tooltip"));
 
                             if ui
-                                .add_enabled(
-                                    !self.image_files.is_empty(),
-                                    egui::Button::new(tr("toolbar.reload_current_image")),
-                                )
+                                .add_enabled(!self.image_files.is_empty(), egui::Button::new("↻"))
                                 .on_hover_text(tr("toolbar.reload_current_image.tooltip"))
                                 .clicked()
                             {
@@ -3316,6 +3324,7 @@ impl eframe::App for MangaReader {
                                 self.textures = self.load_pair(self.current_index, ctx);
                             }
 
+                            // --- Hide Button ---
                             // --- Hide Button ---
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),

@@ -22,7 +22,7 @@ use image::codecs::gif::GifDecoder;
 use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, DynamicImage, ImageFormat};
-use pdfium_render::prelude::Pixels;
+use pdfium_render::prelude::{PdfDocument, Pdfium, Pixels};
 use std::env;
 use std::fs::{self, File};
 use std::io::Cursor;
@@ -525,6 +525,9 @@ pub struct MangaReader {
     animation_scan_epoch: Arc<AtomicU64>,
     animation_scan_rx: Option<Receiver<AnimationScanEvent>>,
     animation_scan_status: std::collections::HashMap<String, AnimationScanStatus>,
+    pdfium: Option<&'static Pdfium>,
+    pdf_document: Option<PdfDocument<'static>>,
+    pdf_document_path: Option<PathBuf>,
     initial_path: Option<PathBuf>,
     source_mode: SourceMode,
     last_image_switch_time: Instant,
@@ -596,6 +599,9 @@ impl MangaReader {
             animation_scan_epoch: Arc::new(AtomicU64::new(0)),
             animation_scan_rx: None,
             animation_scan_status: Default::default(),
+            pdfium: None,
+            pdf_document: None,
+            pdf_document_path: None,
             source_mode: SourceMode::Zip,
             last_image_switch_time: Instant::now(),
             auto_scroll_enabled: false,
@@ -705,6 +711,43 @@ impl MangaReader {
     fn clear_animation_scan_state(&mut self) {
         self.cancel_animation_scan();
         self.animation_scan_status.clear();
+    }
+
+    fn clear_pdf_document_cache(&mut self) {
+        self.pdf_document = None;
+        self.pdf_document_path = None;
+    }
+
+    fn pdfium_instance(&mut self) -> Option<&'static Pdfium> {
+        if let Some(pdfium) = self.pdfium {
+            return Some(pdfium);
+        }
+
+        let pdfium = Box::leak(Box::new(Pdfium::default()));
+        self.pdfium = Some(pdfium);
+        Some(pdfium)
+    }
+
+    fn ensure_pdf_document_loaded(&mut self, path: &Path) -> Option<usize> {
+        if self.pdf_document_path.as_deref() == Some(path) {
+            return self
+                .pdf_document
+                .as_ref()
+                .map(|doc| usize::from(doc.pages().len()));
+        }
+
+        self.clear_pdf_document_cache();
+
+        let doc = self
+            .pdfium_instance()?
+            .load_pdf_from_file(path, None)
+            .ok()?;
+        let page_count = usize::from(doc.pages().len());
+
+        self.pdf_document = Some(doc);
+        self.pdf_document_path = Some(path.to_path_buf());
+
+        Some(page_count)
     }
 
     fn open_file_dialog(&mut self) {
@@ -1742,13 +1785,16 @@ impl MangaReader {
 
     /// Helper to render a specific page
     fn render_pdf_page(&self, index: usize, ctx: &egui::Context) -> Option<DynamicImage> {
-        // You would typically store a reference to the loaded document
-        // and render the page here.
-        let pdfium = pdfium_render::prelude::Pdfium::default();
-        let doc = pdfium
-            .load_pdf_from_file(self.zip_path.as_ref()?, None)
-            .ok()?;
-        let page = doc.pages().get(index as u16).ok()?;
+        let source_path = self.zip_path.as_ref()?;
+        let doc = match self.pdf_document.as_ref() {
+            Some(doc) if self.pdf_document_path.as_deref() == Some(source_path.as_path()) => doc,
+            _ => return None,
+        };
+
+        let page = match doc.pages().get(index as u16) {
+            Ok(page) => page,
+            Err(_) => return None,
+        };
         let width_inch = page.width().value;
         let height_inch = page.height().value;
 
@@ -1785,6 +1831,7 @@ impl MangaReader {
 
     fn load_source(&mut self, path: PathBuf, ctx: &egui::Context) {
         self.stop_auto_scroll();
+        self.clear_pdf_document_cache();
         let mut target_path = path.clone();
         let mut start_at_filename: Option<String> = None;
 
@@ -1837,14 +1884,14 @@ impl MangaReader {
             }
             "pdf" => {
                 // --- PDF MODE ---
-                // Initialize Pdfium (you may need to bundle the dll/so/dylib)
-                let pdfium = pdfium_render::prelude::Pdfium::default();
-                if let Ok(doc) = pdfium.load_pdf_from_file(&path, None) {
-                    let page_count = doc.pages().len();
-                    for i in 0..page_count {
-                        // We use a virtual naming scheme for PDF pages in our image_files list
-                        images.push(format!("pdf_page_{}", i));
+                match self.ensure_pdf_document_loaded(&path) {
+                    Some(page_count) => {
+                        for i in 0..page_count {
+                            // We use a virtual naming scheme for PDF pages in our image_files list
+                            images.push(format!("pdf_page_{}", i));
+                        }
                     }
+                    None => {}
                 }
                 self.source_mode = SourceMode::Pdf;
             }

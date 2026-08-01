@@ -18,6 +18,7 @@ Designed specifically for the Windows, it focuses on providing a fluid, lag-free
     * **No Zip extraction required** RustMangaReader reads directly from compressed files saving disk space without sacrificing speed.
 * **Smart Scaling**: Includes multiple resampling algorithms from Nearest Neighbor to Lanczos3 to make every scan look its best on your monitor.
 * **Tailored Reading**: Supports Single Page, Double Page (Left-to-Right), and Double Page (Right-to-Left) modes, Top-Down (Web Manga Mode), including a "Cover + Spreads" shift toggle (Odd/Even page).
+* **Automatic Page Scrolling**: Supports automatic scrolling for continuous reading.
 * Can shift single page to prevent unmatched double page.
 
 ### 🎁 Free & Open Feedback
@@ -42,6 +43,8 @@ RustMangaReader supports almost every modern image format, including high-effici
     Standard: .png, .jpg, .jpeg, .bmp, .tiff
     Web & Modern: .webp, .avif
     Legacy/Specific: .tga, .gif
+
+Animated image playback is also supported for `.webp`, `.png`, and `.gif`.
 
 ### ⌨️ Controls & Customization
 
@@ -95,6 +98,7 @@ Windows専用に設計されており、ダブルバファーとネイティブ�
 * **Windowsに最適化**: Windowsネイティブのソート順（「Page2」が「Page10」の前に正しく並ぶ）と、高性能なGPUレンダリングを活用しています。
 * **スマートスケーリング**: Nearest Neighbor（最速）からLanczos3（高品質）まで、複数のリサンプリングアルゴリズムを搭載。どんなスキャン画像もモニターに合わせて美しく表示します。
 * **読書スタイルに合わせた閲覧**: 単一ページ、見開き（左開き/右開き）モード、縦スクロールモードをサポート。「表紙＋見開き」の切り替え（奇数/偶数ページ開始）も可能です。
+* **自動ページスクロール**: 自動スクロールに対応しています。
 * **アーカイブの展開不要**: 圧縮ファイルから直接読み込み（オンザフライ読み込み）を行うため、ストレージを消費せず、かつ高速な動作を実現しています。
 * 見開きモードでの１ページだけ送ることも可能
 
@@ -113,6 +117,8 @@ MangaReaderは、圧縮アーカイブと生のファイル構造の両方をシ
     標準: .png, .jpg, .jpeg, .bmp, .tiff
     Web & モダン: .webp, .avif
     レガシー/特定用途: .tga, .gif
+
+さらに、`.webp`、`.png`、`.gif` のアニメーション再生にも対応しています。
 
 ### ⌨️ 操作とカスタマイズ
 

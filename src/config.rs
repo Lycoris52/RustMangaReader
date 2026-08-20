@@ -60,6 +60,7 @@ impl ResizeMethod {
 pub enum ImageSizingMode {
     FitHeight,
     FitWidth,
+    FitBoth,
     OriginalSize,
 }
 
@@ -113,6 +114,8 @@ pub enum MangaAction {
     SlideImageUp,
     ToggleAutoScroll,
     ReloadCurrentImage,
+    ZoomIn,
+    ZoomOut,
     NextPage,
     PrevPage,
     OneNextPage,
@@ -130,12 +133,14 @@ pub enum MangaAction {
 }
 
 impl MangaAction {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::None,
         Self::SlideImageDown,
         Self::SlideImageUp,
         Self::ToggleAutoScroll,
         Self::ReloadCurrentImage,
+        Self::ZoomIn,
+        Self::ZoomOut,
         Self::NextPage,
         Self::PrevPage,
         Self::OneNextPage,

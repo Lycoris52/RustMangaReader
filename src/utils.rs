@@ -219,6 +219,8 @@ pub fn action_label(action: MangaAction) -> &'static str {
         MangaAction::SlideImageUp => tr("action.slide_image_up"),
         MangaAction::ToggleAutoScroll => tr("action.toggle_auto_scroll"),
         MangaAction::ReloadCurrentImage => tr("action.reload_current_image"),
+        MangaAction::ZoomIn => tr("action.zoom_in"),
+        MangaAction::ZoomOut => tr("action.zoom_out"),
         MangaAction::NextPage => tr("action.next_page"),
         MangaAction::PrevPage => tr("action.prev_page"),
         MangaAction::OneNextPage => tr("action.one_next_page"),
@@ -416,6 +418,8 @@ pub fn is_repeatable_gamepad_action(action: MangaAction) -> bool {
             | MangaAction::PrevPage
             | MangaAction::OneNextPage
             | MangaAction::OnePrevPage
+            | MangaAction::ZoomIn
+            | MangaAction::ZoomOut
             | MangaAction::NextFile
             | MangaAction::PrevFile
             | MangaAction::NextFolder

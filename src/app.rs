@@ -1,4 +1,4 @@
-﻿use crate::config::{
+use crate::config::{
     AppSettings, GamepadButton, GamepadConfig, ImageSizingMode, KeyConfig, LastPageAction,
     MangaAction, MouseButton, MouseConfig, MouseGesture, PageViewOptions, ResizeMethod, Shortcut,
     SourceMode, UiLanguage,
@@ -43,6 +43,10 @@ const SETTINGS_TOGGLE_FADE_DURATION: Duration = Duration::from_secs(1);
 const AUTO_SCROLL_MIN_DELAY_MS: u64 = 200;
 const AUTO_SCROLL_MAX_DELAY_MS: u64 = 30_000;
 const ANIMATION_SCAN_AHEAD_PAGES: usize = 5;
+const ZOOM_MIN: f32 = 0.1;
+const ZOOM_MAX: f32 = 3.0;
+const ZOOM_STEP: f32 = 1.1;
+const ZOOM_RELOAD_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ControlProfile {
@@ -535,6 +539,9 @@ pub struct MangaReader {
     auto_scroll_next_tick: Option<Instant>,
     zoom_factor: f32,
     pan_offset: egui::Vec2,
+    last_page_view_rect: Option<egui::Rect>,
+    last_zoom_change_at: Option<Instant>,
+    zoom_reload_pending: bool,
     is_scrubbing: bool,
     mouse_press_started: [Option<Instant>; 5],
     mouse_press_origin: [Option<egui::Pos2>; 5],
@@ -608,6 +615,9 @@ impl MangaReader {
             auto_scroll_next_tick: None,
             zoom_factor: 1.0,
             pan_offset: egui::Vec2::ZERO,
+            last_page_view_rect: None,
+            last_zoom_change_at: None,
+            zoom_reload_pending: false,
             is_scrubbing: false,
             mouse_press_started: [None; 5],
             mouse_press_origin: [None; 5],
@@ -785,6 +795,86 @@ impl MangaReader {
         self.pan_offset = egui::Vec2::ZERO;
     }
 
+    fn reload_zoom_textures(&mut self, ctx: &egui::Context) {
+        self.reset_buffer();
+        self.texture_cache.clear();
+        self.textures = self.load_pair(self.current_index, ctx);
+    }
+
+    fn schedule_zoom_texture_reload(&mut self, ctx: &egui::Context) {
+        self.last_zoom_change_at = Some(Instant::now());
+        self.zoom_reload_pending = true;
+        ctx.request_repaint_after(ZOOM_RELOAD_DELAY);
+    }
+
+    fn reload_zoom_textures_if_settled(&mut self, ctx: &egui::Context) {
+        if !self.zoom_reload_pending {
+            return;
+        }
+        if self.zip_path.is_none() || self.image_files.is_empty() {
+            self.zoom_reload_pending = false;
+            self.last_zoom_change_at = None;
+            return;
+        }
+
+        if let Some(last_zoom_change_at) = self.last_zoom_change_at {
+            let elapsed = last_zoom_change_at.elapsed();
+            if elapsed >= ZOOM_RELOAD_DELAY {
+                self.reload_zoom_textures(ctx);
+                self.zoom_reload_pending = false;
+                self.last_zoom_change_at = None;
+                ctx.request_repaint();
+            } else {
+                ctx.request_repaint_after(ZOOM_RELOAD_DELAY - elapsed);
+            }
+        }
+    }
+
+    fn apply_zoom_factor(
+        &mut self,
+        new_zoom_factor: f32,
+        ctx: &egui::Context,
+        anchor_to_pointer: bool,
+    ) {
+        let old_zoom_factor = self.zoom_factor;
+        let new_zoom_factor = new_zoom_factor.clamp(ZOOM_MIN, ZOOM_MAX);
+        if (new_zoom_factor - old_zoom_factor).abs() <= f32::EPSILON {
+            return;
+        }
+
+        let rect = self
+            .last_page_view_rect
+            .unwrap_or_else(|| ctx.content_rect());
+        if anchor_to_pointer
+            && let Some(pointer_pos) = ctx.pointer_hover_pos()
+            && rect.contains(pointer_pos)
+        {
+            let scale_ratio = new_zoom_factor / old_zoom_factor;
+            if self.config.page_view_options == PageViewOptions::TopDown {
+                let relative_y = pointer_pos.y - rect.center().y - self.top_down_scroll_offset;
+                self.top_down_scroll_offset += relative_y * (1.0 - scale_ratio);
+                self.clamp_top_down_scroll_offset();
+            } else {
+                let relative_pos = pointer_pos - rect.center() - self.pan_offset;
+                self.pan_offset += relative_pos * (1.0 - scale_ratio);
+            }
+        } else if (new_zoom_factor - 1.0).abs() <= 0.01 {
+            self.reset_pan();
+        }
+
+        self.zoom_factor = new_zoom_factor;
+        self.schedule_zoom_texture_reload(ctx);
+        ctx.request_repaint();
+    }
+
+    fn zoom_in(&mut self, ctx: &egui::Context) {
+        self.apply_zoom_factor(self.zoom_factor * ZOOM_STEP, ctx, true);
+    }
+
+    fn zoom_out(&mut self, ctx: &egui::Context) {
+        self.apply_zoom_factor(self.zoom_factor / ZOOM_STEP, ctx, true);
+    }
+
     fn effective_image_container_size(&self, ctx: &egui::Context) -> egui::Vec2 {
         let content_rect = ctx.content_rect();
         if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
@@ -815,6 +905,10 @@ impl MangaReader {
                 let width = container_size.x * zoom_factor;
                 egui::vec2(width, width / aspect_ratio)
             }
+            ImageSizingMode::FitBoth => {
+                let scale = (container_size.x / tex_size.x).min(container_size.y / tex_size.y);
+                tex_size * scale * zoom_factor
+            }
             ImageSizingMode::OriginalSize => tex_size * zoom_factor,
         }
     }
@@ -834,6 +928,11 @@ impl MangaReader {
             ImageSizingMode::FitWidth => {
                 let width = container_size.x.max(1.0) * self.zoom_factor;
                 egui::vec2(width, width / aspect_ratio)
+            }
+            ImageSizingMode::FitBoth => {
+                let scale = (container_size.x.max(1.0) / tex_size.x)
+                    .min(container_size.y.max(1.0) / tex_size.y);
+                tex_size * scale * self.zoom_factor
             }
             ImageSizingMode::OriginalSize => tex_size * self.zoom_factor,
         }
@@ -1062,6 +1161,14 @@ impl MangaReader {
                     ImageSizingMode::FitWidth => {
                         let target_w = container_size.x.max(1.0) as u32;
                         let target_h = (target_w as f32 / aspect_ratio) as u32;
+                        (target_w, target_h)
+                    }
+                    ImageSizingMode::FitBoth => {
+                        let width_scale = container_size.x.max(1.0) / img.width() as f32;
+                        let height_scale = container_size.y.max(1.0) / img.height() as f32;
+                        let scale = width_scale.min(height_scale);
+                        let target_w = (img.width() as f32 * scale) as u32;
+                        let target_h = (img.height() as f32 * scale) as u32;
                         (target_w, target_h)
                     }
                     ImageSizingMode::OriginalSize => unreachable!(),
@@ -2468,6 +2575,8 @@ impl MangaReader {
             }
             MangaAction::ToggleAutoScroll => self.toggle_auto_scroll(ctx),
             MangaAction::ReloadCurrentImage => self.reload_current_image(ctx),
+            MangaAction::ZoomIn => self.zoom_in(ctx),
+            MangaAction::ZoomOut => self.zoom_out(ctx),
             MangaAction::NextPage => self.next_page(ctx, false),
             MangaAction::PrevPage => self.prev_page(ctx, false),
             MangaAction::OneNextPage => self.next_page(ctx, true),
@@ -2505,18 +2614,32 @@ impl MangaReader {
         ui.allocate_ui_at_rect(rect, |ui| {
             let resp = ui.interact(visible_rect, ui.id().with(hit_id), egui::Sense::click());
 
-            // Render the image on top
             if let Some(tex) = &self.textures[tex_index] {
                 let previous_clip_rect = ui.clip_rect();
                 ui.set_clip_rect(previous_clip_rect.intersect(visible_rect));
-                let layout = egui::Layout::top_down(align);
-                ui.with_layout(layout, |ui| {
-                    ui.add(
-                        egui::Image::new(tex)
-                            .fit_to_exact_size(image_size)
-                            .maintain_aspect_ratio(true),
+                if self.config.image_sizing_mode == ImageSizingMode::FitBoth {
+                    let image_x = match align {
+                        egui::Align::RIGHT => rect.right() - image_size.x,
+                        egui::Align::Center => rect.center().x - image_size.x * 0.5,
+                        egui::Align::LEFT => rect.left(),
+                    };
+                    let image_y = rect.center().y - image_size.y * 0.5;
+                    ui.painter().image(
+                        tex.id(),
+                        egui::Rect::from_min_size(egui::pos2(image_x, image_y), image_size),
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
                     );
-                });
+                } else {
+                    let layout = egui::Layout::top_down(align);
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Image::new(tex)
+                                .fit_to_exact_size(image_size)
+                                .maintain_aspect_ratio(true),
+                        );
+                    });
+                }
                 ui.set_clip_rect(previous_clip_rect);
             }
             resp
@@ -2746,6 +2869,7 @@ impl eframe::App for MangaReader {
                 self.load_source(path, ctx);
             }
         }
+        self.reload_zoom_textures_if_settled(ctx);
 
         if self.config.show_settings {
             egui::SidePanel::right("settings_panel")
@@ -3023,27 +3147,22 @@ impl eframe::App for MangaReader {
                                 let previous_slider_width = ui.spacing().slider_width;
                                 ui.spacing_mut().slider_width =
                                     self.config.settings_width * 0.9 - 160.0;
+                                let mut zoom_factor = self.zoom_factor;
                                 let zoom_slider = ui.add(
-                                    egui::Slider::new(&mut self.zoom_factor, 0.1..=3.0)
+                                    egui::Slider::new(&mut zoom_factor, ZOOM_MIN..=ZOOM_MAX)
                                         .text(tr("settings.zoom.slider")),
                                 );
                                 ui.spacing_mut().slider_width = previous_slider_width;
-                                let is_scrubbing_zoom = zoom_slider.dragged();
-                                if zoom_slider.changed() && !is_scrubbing_zoom {
-                                    if self.zoom_factor != 1.0 {
-                                        self.reset_buffer();
-                                        self.texture_cache.clear();
-                                        self.reset_pan();
-                                        self.textures = self.load_pair(self.current_index, ctx);
-                                    }
+                                if zoom_slider.changed() {
+                                    self.apply_zoom_factor(zoom_factor, ctx, false);
                                 }
 
                                 if ui
                                     .button(egui::RichText::new(tr("settings.zoom.reset")))
                                     .clicked()
                                 {
-                                    self.zoom_factor = 1.0;
                                     self.reset_pan();
+                                    self.apply_zoom_factor(1.0, ctx, false);
                                 }
                                 ui.add_space(10.0);
                                 ui.label(
@@ -3064,6 +3183,13 @@ impl eframe::App for MangaReader {
                                         &mut self.config.image_sizing_mode,
                                         ImageSizingMode::FitWidth,
                                         egui::RichText::new(tr("settings.image_sizing.fit_width")),
+                                    )
+                                    .clicked();
+                                image_sizing_changed |= ui
+                                    .radio_value(
+                                        &mut self.config.image_sizing_mode,
+                                        ImageSizingMode::FitBoth,
+                                        egui::RichText::new(tr("settings.image_sizing.fit_both")),
                                     )
                                     .clicked();
                                 image_sizing_changed |= ui

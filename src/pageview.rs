@@ -1,5 +1,5 @@
 use super::MangaReader;
-use crate::config::{MangaAction, PageViewOptions};
+use crate::config::{ImageSizingMode, MangaAction, PageViewOptions};
 use crate::localize::tr;
 use eframe::egui;
 use egui::Align;
@@ -40,6 +40,7 @@ impl MangaReader {
             .frame(egui::Frame::NONE.fill(self.image_panel_background_color()))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
+                self.last_page_view_rect = Some(rect);
 
                 // Create a 'Response' for the entire background area first,
                 // but we check it at the END of the code.
@@ -142,6 +143,13 @@ impl MangaReader {
                         let offset = self.config.spread_center_offset;
                         let top_y = rect.center().y - left_size.y.max(right_size.y) * 0.5
                             + self.pan_offset.y;
+                        let image_top_y = |size: egui::Vec2| {
+                            if self.config.image_sizing_mode == ImageSizingMode::FitBoth {
+                                rect.center().y - size.y * 0.5 + self.pan_offset.y
+                            } else {
+                                top_y
+                            }
+                        };
                         let (visual_left_size, _) =
                             if self.config.page_view_options == PageViewOptions::DoubleLR {
                                 (right_size, left_size)
@@ -162,7 +170,7 @@ impl MangaReader {
                                     ui,
                                     tex,
                                     egui::Rect::from_min_size(
-                                        egui::pos2(visual_left_x, top_y),
+                                        egui::pos2(visual_left_x, image_top_y(right_size)),
                                         right_size,
                                     ),
                                     left_visible_rect,
@@ -173,7 +181,7 @@ impl MangaReader {
                                     ui,
                                     tex,
                                     egui::Rect::from_min_size(
-                                        egui::pos2(visual_right_x, top_y),
+                                        egui::pos2(visual_right_x, image_top_y(left_size)),
                                         left_size,
                                     ),
                                     right_visible_rect,
@@ -185,7 +193,7 @@ impl MangaReader {
                                     ui,
                                     tex,
                                     egui::Rect::from_min_size(
-                                        egui::pos2(visual_left_x, top_y),
+                                        egui::pos2(visual_left_x, image_top_y(left_size)),
                                         left_size,
                                     ),
                                     left_visible_rect,
@@ -196,7 +204,7 @@ impl MangaReader {
                                     ui,
                                     tex,
                                     egui::Rect::from_min_size(
-                                        egui::pos2(visual_right_x, top_y),
+                                        egui::pos2(visual_right_x, image_top_y(right_size)),
                                         right_size,
                                     ),
                                     right_visible_rect,
@@ -344,6 +352,7 @@ impl MangaReader {
             .frame(egui::Frame::NONE.fill(self.image_panel_background_color()))
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
+                self.last_page_view_rect = Some(rect);
                 let response = ui.interact(
                     rect,
                     ui.id().with("top_down_bg"),

@@ -47,6 +47,8 @@ const ZOOM_MIN: f32 = 0.1;
 const ZOOM_MAX: f32 = 3.0;
 const ZOOM_STEP: f32 = 1.1;
 const ZOOM_RELOAD_DELAY: Duration = Duration::from_secs(1);
+const FULLSCREEN_TOP_CHROME_REVEAL_HEIGHT: f32 = 20.0;
+const FULLSCREEN_TITLE_BAR_HEIGHT: f32 = 28.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ControlProfile {
@@ -552,6 +554,7 @@ pub struct MangaReader {
     gamepad_repeat_deadlines: [Option<Instant>; 16],
     selected_control_profile: ControlProfile,
     settings_toggle_last_visible_at: Instant,
+    fullscreen_top_chrome_visible: bool,
 }
 
 impl MangaReader {
@@ -628,6 +631,7 @@ impl MangaReader {
             gamepad_repeat_deadlines: [None; 16],
             selected_control_profile: ControlProfile::Default,
             settings_toggle_last_visible_at: Instant::now(),
+            fullscreen_top_chrome_visible: false,
         }
     }
 
@@ -669,6 +673,84 @@ impl MangaReader {
     fn toggle_auto_scroll(&mut self, ctx: &egui::Context) {
         let enabled = !self.auto_scroll_enabled;
         self.set_auto_scroll_enabled(enabled, ctx);
+    }
+
+    fn set_fullscreen(&mut self, fullscreen: bool, ctx: &egui::Context) {
+        self.is_fullscreen = fullscreen;
+        if !fullscreen {
+            self.fullscreen_top_chrome_visible = false;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+    }
+
+    fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.set_fullscreen(!self.is_fullscreen, ctx);
+    }
+
+    fn update_fullscreen_top_chrome_visibility(&mut self, ctx: &egui::Context) {
+        if !self.is_fullscreen {
+            self.fullscreen_top_chrome_visible = false;
+            return;
+        }
+
+        let toolbar_scale = self.config.top_toolbar_scale.clamp(1.0, 3.0);
+        let visible_hover_height = FULLSCREEN_TITLE_BAR_HEIGHT + (42.0 * toolbar_scale);
+        let hover_height = if self.fullscreen_top_chrome_visible {
+            visible_hover_height
+        } else {
+            FULLSCREEN_TOP_CHROME_REVEAL_HEIGHT
+        };
+        let should_show = ctx
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| pos.y <= hover_height);
+
+        if self.fullscreen_top_chrome_visible != should_show {
+            self.fullscreen_top_chrome_visible = should_show;
+            ctx.request_repaint();
+        }
+    }
+
+    fn render_fullscreen_title_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("fullscreen_title_bar")
+            .exact_height(FULLSCREEN_TITLE_BAR_HEIGHT)
+            .frame(
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_gray(24))
+                    .inner_margin(egui::Margin::symmetric(8, 3)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let title = tr("app.title");
+                    let title_width = (ui.available_width() - 92.0).max(0.0);
+                    let title_response = ui.add_sized(
+                        [title_width, ui.available_height()],
+                        egui::Label::new(
+                            egui::RichText::new(title)
+                                .color(egui::Color32::from_gray(220))
+                                .strong(),
+                        )
+                        .sense(egui::Sense::drag()),
+                    );
+                    if title_response.drag_started() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+
+                    if ui.button("—").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    if ui
+                        .button("🗗")
+                        .on_hover_text(tr("toolbar.fullscreen"))
+                        .clicked()
+                    {
+                        self.set_fullscreen(false, ctx);
+                    }
+                    if ui.button("×").clicked() {
+                        self.save_settings();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
     }
 
     fn reload_current_image(&mut self, ctx: &egui::Context) {
@@ -2588,8 +2670,7 @@ impl MangaReader {
             MangaAction::NextFolder => self.next_folder(ctx),
             MangaAction::PrevFolder => self.prev_folder(ctx),
             MangaAction::FullScreen => {
-                self.is_fullscreen = !self.is_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                self.toggle_fullscreen(ctx);
             }
             MangaAction::ViewMode => self.change_shifted_mode(ctx),
             MangaAction::OpenFile => self.open_file_dialog(),
@@ -3566,7 +3647,15 @@ impl eframe::App for MangaReader {
                 });
         }
 
-        if self.config.show_top_bar && !self.is_fullscreen {
+        self.update_fullscreen_top_chrome_visibility(ctx);
+        let show_top_toolbar =
+            self.config.show_top_bar && (!self.is_fullscreen || self.fullscreen_top_chrome_visible);
+
+        if self.is_fullscreen && self.fullscreen_top_chrome_visible {
+            self.render_fullscreen_title_bar(ctx);
+        }
+
+        if show_top_toolbar {
             egui::TopBottomPanel::top("top_toolbar")
                 .frame(
                     egui::Frame::NONE
@@ -3702,10 +3791,7 @@ impl eframe::App for MangaReader {
                                 .on_hover_text(tr("toolbar.fullscreen"))
                                 .clicked()
                             {
-                                self.is_fullscreen = !self.is_fullscreen;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
-                                    self.is_fullscreen,
-                                ));
+                                self.toggle_fullscreen(ctx);
                             }
                             ui.separator();
                             if ui

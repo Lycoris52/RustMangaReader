@@ -468,6 +468,10 @@ pub struct AppSettings {
     pub resize_method: ResizeMethod,
     pub page_view_options: PageViewOptions,
     #[serde(default)]
+    pub auto_page_layout_rl: bool,
+    #[serde(default)]
+    pub auto_page_layout_lr: bool,
+    #[serde(default)]
     pub image_sizing_mode: ImageSizingMode,
     #[serde(default)]
     pub spread_center_offset: f32,
@@ -521,6 +525,8 @@ impl Default for AppSettings {
         Self {
             resize_method: ResizeMethod::Triangle,
             page_view_options: PageViewOptions::DoubleRL,
+            auto_page_layout_rl: false,
+            auto_page_layout_lr: false,
             image_sizing_mode: ImageSizingMode::FitHeight,
             spread_center_offset: 0.0,
             image_panel_background: default_image_panel_background(),

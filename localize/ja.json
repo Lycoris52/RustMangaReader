@@ -174,5 +174,8 @@
   "action.fullscreen": "フルスクリーン切替",
   "action.view_mode": "奇数/偶数ページ開始",
   "action.open_file": "ファイルを開く",
-  "action.quit_app": "アプリ終了"
+  "action.quit_app": "アプリ終了",
+  "settings.auto_page_layout_rl": "自動見開き表示（右から左）",
+  "settings.auto_page_layout_lr": "自動見開き表示（左から右）",
+  "settings.auto_page_layout.tooltip": "縦長画像は見開き、横長・正方形画像は単ページで表示します。2枚目が横長の場合は、次のページ送りまで表示しません。読む方向を1つ選択してください。"
 }

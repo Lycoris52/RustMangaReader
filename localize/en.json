@@ -174,5 +174,8 @@
   "action.fullscreen": "Toggle Fullscreen",
   "action.view_mode": "Odd/Even Page Start",
   "action.open_file": "Open File",
-  "action.quit_app": "Quit App"
+  "action.quit_app": "Quit App",
+  "settings.auto_page_layout_rl": "Automatic page layout (right to left)",
+  "settings.auto_page_layout_lr": "Automatic page layout (left to right)",
+  "settings.auto_page_layout.tooltip": "Show portrait images as double pages and landscape or square images as single pages. A wide second image is held for the next page turn. Choose one reading direction."
 }

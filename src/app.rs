@@ -50,6 +50,18 @@ const ZOOM_RELOAD_DELAY: Duration = Duration::from_secs(1);
 const FULLSCREEN_TOP_CHROME_REVEAL_HEIGHT: f32 = 20.0;
 const FULLSCREEN_TITLE_BAR_HEIGHT: f32 = 28.0;
 
+fn is_portrait(size: [u32; 2]) -> bool {
+    size[1] > size[0]
+}
+
+fn automatic_pair_count(first: Option<[u32; 2]>, second: Option<[u32; 2]>, cover: bool) -> usize {
+    if !cover && first.is_some_and(is_portrait) && second.is_some_and(is_portrait) {
+        2
+    } else {
+        1
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ControlProfile {
     Default,
@@ -522,6 +534,7 @@ pub struct MangaReader {
     config: AppSettings,
     binding_action: Option<BindingTarget>,
     texture_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    image_dimensions: std::collections::HashMap<String, [u32; 2]>,
     active_animations: [Option<AnimatedPage>; 2],
     active_animation_keys: [Option<String>; 2],
     animated_image_byte_cache: std::collections::HashMap<String, Vec<u8>>,
@@ -574,6 +587,10 @@ impl MangaReader {
         };
         set_language(config.language);
 
+        Self::with_settings(config, initial_path)
+    }
+
+    fn with_settings(config: AppSettings, initial_path: Option<PathBuf>) -> Self {
         let (tx, rx) = channel();
         Self {
             initial_path,
@@ -600,6 +617,7 @@ impl MangaReader {
             config, // Store the loaded config here
             binding_action: None,
             texture_cache: Default::default(),
+            image_dimensions: Default::default(),
             active_animations: std::array::from_fn(|_| None),
             active_animation_keys: std::array::from_fn(|_| None),
             animated_image_byte_cache: Default::default(),
@@ -775,7 +793,7 @@ impl MangaReader {
                 self.ensure_top_down_texture_loaded(index, ctx);
             }
         } else {
-            self.textures = self.load_pair(self.current_index, ctx);
+            self.load_current_pair(ctx);
         }
 
         self.page_indicator_time = Some(Instant::now());
@@ -880,7 +898,7 @@ impl MangaReader {
     fn reload_zoom_textures(&mut self, ctx: &egui::Context) {
         self.reset_buffer();
         self.texture_cache.clear();
-        self.textures = self.load_pair(self.current_index, ctx);
+        self.load_current_pair(ctx);
     }
 
     fn schedule_zoom_texture_reload(&mut self, ctx: &egui::Context) {
@@ -1084,6 +1102,80 @@ impl MangaReader {
                 .is_some_and(|size| size.x > page_size.x || size.y > page_size.y)
     }
 
+    fn automatic_page_direction(&self) -> Option<PageViewOptions> {
+        if self.config.page_view_options == PageViewOptions::TopDown {
+            None
+        } else if self.config.auto_page_layout_rl {
+            Some(PageViewOptions::DoubleRL)
+        } else if self.config.auto_page_layout_lr {
+            Some(PageViewOptions::DoubleLR)
+        } else {
+            None
+        }
+    }
+
+    fn page_dimensions(&self, index: usize) -> Option<[u32; 2]> {
+        self.image_dimensions
+            .get(self.image_files.get(index)?)
+            .copied()
+    }
+
+    fn automatic_page_count(&self, index: usize) -> usize {
+        automatic_pair_count(
+            self.page_dimensions(index),
+            self.page_dimensions(index + 1),
+            self.is_shifted && index == 0,
+        )
+    }
+
+    fn apply_automatic_page_layout(&mut self) {
+        let Some(direction) = self.automatic_page_direction() else {
+            return;
+        };
+        let Some(size) = self.page_dimensions(self.current_index) else {
+            return;
+        };
+        self.config.page_view_options = if is_portrait(size) {
+            direction
+        } else {
+            PageViewOptions::Single
+        };
+        if self.automatic_page_count(self.current_index) == 1 {
+            self.textures[1] = None;
+            self.active_animations[1] = None;
+            self.active_animation_keys[1] = None;
+        }
+    }
+
+    fn load_current_pair(&mut self, ctx: &egui::Context) {
+        self.textures = self.load_pair(self.current_index, ctx);
+        self.apply_automatic_page_layout();
+    }
+
+    fn automatic_previous_index(&mut self, ctx: &egui::Context) -> usize {
+        let previous = self.current_index.saturating_sub(1);
+        if self.page_dimensions(previous).is_none() {
+            let _ = self.load_pair(previous, ctx);
+        }
+        if !self.page_dimensions(previous).is_some_and(is_portrait) {
+            return previous;
+        }
+        // Align pairs within each portrait run. An odd final portrait before a
+        // landscape page must remain a singleton when navigating backward too.
+        let mut run_start = previous;
+        while run_start > 0 && !(self.is_shifted && run_start == 1) {
+            let candidate = run_start - 1;
+            if self.page_dimensions(candidate).is_none() {
+                let _ = self.load_pair(candidate, ctx);
+            }
+            if !self.page_dimensions(candidate).is_some_and(is_portrait) {
+                break;
+            }
+            run_start = candidate;
+        }
+        run_start + ((previous - run_start) / 2) * 2
+    }
+
     fn update_buffers(&mut self, ctx: &egui::Context) {
         let idx = self.current_index;
 
@@ -1101,6 +1193,17 @@ impl MangaReader {
 
         // Only update if we moved OR if the buffers were recently consumed
         if self.last_buffered_index == Some(idx) {
+            return;
+        }
+
+        if self.automatic_page_direction().is_some() {
+            let next_index = idx + self.automatic_page_count(idx);
+            self.buffer_next = self.load_pair(next_index, ctx);
+            if idx > 0 {
+                let previous_index = self.automatic_previous_index(ctx);
+                self.buffer_prev = self.load_pair(previous_index, ctx);
+            }
+            self.last_buffered_index = Some(idx);
             return;
         }
 
@@ -1292,7 +1395,21 @@ impl MangaReader {
     }
 
     fn color_image_from_dynamic(&self, img: DynamicImage, ctx: &egui::Context) -> egui::ColorImage {
-        Self::color_image_from_dynamic_with_spec(img, self.current_image_processing_spec(ctx))
+        let mut spec = self.current_image_processing_spec(ctx);
+        if self.automatic_page_direction().is_some() {
+            // Preloaded images and animation first frames need the resolution of
+            // their own layout, even when the current page uses a different one.
+            let rect = ctx.content_rect();
+            spec.container_size = if is_portrait([img.width(), img.height()]) {
+                [
+                    ((rect.width() * 0.5) - self.config.spread_center_offset.abs()).max(1.0),
+                    rect.height(),
+                ]
+            } else {
+                [rect.width(), rect.height()]
+            };
+        }
+        Self::color_image_from_dynamic_with_spec(img, spec)
     }
 
     fn read_source_bytes(&self, filename: &str) -> Option<Vec<u8>> {
@@ -1969,6 +2086,9 @@ impl MangaReader {
                 }
             }
         }
+        if self.automatic_page_direction().is_some() && self.automatic_page_count(start_idx) == 1 {
+            pair[1] = None;
+        }
         pair
     }
 
@@ -2005,6 +2125,8 @@ impl MangaReader {
         cache_name: String,
         ctx: &egui::Context,
     ) -> Option<egui::TextureHandle> {
+        let dimensions = [img.width(), img.height()];
+        self.image_dimensions.insert(cache_name.clone(), dimensions);
         let color_img = self.color_image_from_dynamic(img, ctx);
         let handle = ctx.load_texture(
             &cache_name.clone(),
@@ -2122,6 +2244,7 @@ impl MangaReader {
         } else {
             self.reset_buffer();
             self.texture_cache.clear();
+            self.image_dimensions.clear();
             self.clear_animated_image_cache();
             self.clear_animation_scan_state();
             self.clear_active_animations();
@@ -2146,7 +2269,7 @@ impl MangaReader {
             }
 
             self.restart_animation_scan_for_current_window();
-            self.textures = self.load_pair(self.current_index, ctx);
+            self.load_current_pair(ctx);
             self.reset_top_down_buffer();
             if self.config.page_view_options == PageViewOptions::TopDown {
                 self.ensure_top_down_loaded_around(self.current_index, ctx);
@@ -2176,6 +2299,8 @@ impl MangaReader {
             self.buffer_next = [None, None];
             self.buffer_prev = [None, None];
             1
+        } else if self.automatic_page_direction().is_some() {
+            self.automatic_page_count(self.current_index)
         } else if self.is_single_page() || (self.is_shifted && self.current_index == 0) {
             1
         } else {
@@ -2196,7 +2321,7 @@ impl MangaReader {
                 self.textures = std::mem::take(&mut self.buffer_next);
             } else {
                 // Fallback if buffer wasn't ready (e.g., very fast clicking)
-                self.textures = self.load_pair(self.current_index, ctx);
+                self.load_current_pair(ctx);
             }
             self.buffer_next = [None, None];
         } else {
@@ -2209,6 +2334,10 @@ impl MangaReader {
                     self.show_fading_error(&msg);
                 }
             }
+        }
+        if self.automatic_page_direction().is_some() {
+            self.apply_automatic_page_layout();
+            self.reset_buffer();
         }
         self.page_indicator_time = Some(Instant::now());
     }
@@ -2226,13 +2355,15 @@ impl MangaReader {
             self.buffer_next = [None, None];
             self.buffer_prev = [None, None];
             1
+        } else if self.automatic_page_direction().is_some() {
+            self.current_index - self.automatic_previous_index(ctx)
         } else if self.is_single_page() || (self.is_shifted && self.current_index == 1) {
             1
         } else {
             2
         };
 
-        if self.current_index >= step {
+        if self.current_index > 0 && self.current_index >= step {
             self.current_index -= step;
             self.reset_pan();
             self.top_down_scroll_offset = 0.0;
@@ -2243,7 +2374,7 @@ impl MangaReader {
                 self.buffer_next = std::mem::take(&mut self.textures);
                 self.textures = std::mem::take(&mut self.buffer_prev);
             } else {
-                self.textures = self.load_pair(self.current_index, ctx);
+                self.load_current_pair(ctx);
             }
             self.buffer_prev = [None, None];
         } else {
@@ -2256,6 +2387,10 @@ impl MangaReader {
                     self.show_fading_error(&msg)
                 }
             }
+        }
+        if self.automatic_page_direction().is_some() {
+            self.apply_automatic_page_layout();
+            self.reset_buffer();
         }
         self.page_indicator_time = Some(Instant::now());
     }
@@ -2335,25 +2470,35 @@ impl MangaReader {
         if !self.image_files.is_empty() && self.current_index != 0 {
             self.reset_buffer();
             self.current_index = 0;
-            self.textures = self.load_pair(self.current_index, ctx);
+            self.load_current_pair(ctx);
             self.page_indicator_time = Some(Instant::now());
         }
     }
 
     fn go_to_last_page(&mut self, ctx: &egui::Context) {
         if !self.image_files.is_empty() {
-            // Find the last possible pair start (must be an even index)
-            let last_idx = (self.image_files.len().saturating_sub(1) / 2) * 2;
+            // Find the start of the final view using the active layout's grouping.
+            let last_idx = if self.automatic_page_direction().is_some() {
+                // Treat the position just past the end as a backward page turn.
+                let current_index = self.current_index;
+                self.current_index = self.image_files.len();
+                let last_idx = self.automatic_previous_index(ctx);
+                self.current_index = current_index;
+                last_idx
+            } else {
+                (self.image_files.len().saturating_sub(1) / 2) * 2
+            };
             if self.current_index != last_idx {
                 self.reset_buffer();
                 self.current_index = last_idx;
-                self.textures = self.load_pair(self.current_index, ctx);
+                self.load_current_pair(ctx);
                 self.page_indicator_time = Some(Instant::now());
             }
         }
     }
 
     fn reset_buffer(&mut self) {
+        self.last_buffered_index = None;
         self.buffer_prev = [None, None];
         self.buffer_next = [None, None];
         self.top_down_textures.clear();
@@ -2773,7 +2918,7 @@ impl MangaReader {
         self.reset_buffer();
         self.texture_cache.clear();
         self.reset_pan();
-        self.textures = self.load_pair(self.current_index, ctx);
+        self.load_current_pair(ctx);
         let msg = if self.is_shifted {
             tr("mode.odd_page")
         } else {
@@ -3087,7 +3232,7 @@ impl eframe::App for MangaReader {
                                     if changed {
                                         self.reset_buffer();
                                         self.texture_cache.clear();
-                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.load_current_pair(ctx);
                                         self.save_settings(); // Save when algorithm changes
                                     }
                                 }
@@ -3172,7 +3317,7 @@ impl eframe::App for MangaReader {
                                             if previous_page_view == PageViewOptions::TopDown {
                                                 self.top_down_textures.clear();
                                             }
-                                            self.textures = self.load_pair(self.current_index, ctx);
+                                            self.load_current_pair(ctx);
                                         }
                                         self.save_settings();
                                     }
@@ -3214,7 +3359,7 @@ impl eframe::App for MangaReader {
 
                                     if changed {
                                         self.reset_buffer();
-                                        self.textures = self.load_pair(self.current_index, ctx);
+                                        self.load_current_pair(ctx);
                                         self.save_settings();
                                     }
                                 }
@@ -3284,7 +3429,7 @@ impl eframe::App for MangaReader {
                                     self.reset_buffer();
                                     self.texture_cache.clear();
                                     self.reset_pan();
-                                    self.textures = self.load_pair(self.current_index, ctx);
+                                    self.load_current_pair(ctx);
                                     self.save_settings();
                                 }
                                 separator_pct(ui);
@@ -3296,6 +3441,37 @@ impl eframe::App for MangaReader {
                                         .strong(),
                                 );
                                 separator_pct(ui);
+                                let mut auto_layout_changed = ui
+                                    .checkbox(
+                                        &mut self.config.auto_page_layout_rl,
+                                        tr("settings.auto_page_layout_rl"),
+                                    )
+                                    .on_hover_text(tr("settings.auto_page_layout.tooltip"))
+                                    .changed();
+                                if auto_layout_changed && self.config.auto_page_layout_rl {
+                                    self.config.auto_page_layout_lr = false;
+                                    self.config.page_view_options = PageViewOptions::DoubleRL;
+                                }
+                                let lr_changed = ui
+                                    .checkbox(
+                                        &mut self.config.auto_page_layout_lr,
+                                        tr("settings.auto_page_layout_lr"),
+                                    )
+                                    .on_hover_text(tr("settings.auto_page_layout.tooltip"))
+                                    .changed();
+                                if lr_changed && self.config.auto_page_layout_lr {
+                                    self.config.auto_page_layout_rl = false;
+                                    self.config.page_view_options = PageViewOptions::DoubleLR;
+                                }
+                                auto_layout_changed |= lr_changed;
+                                if auto_layout_changed {
+                                    self.reset_buffer();
+                                    self.texture_cache.clear();
+                                    self.clear_animated_image_cache();
+                                    self.reset_pan();
+                                    self.load_current_pair(ctx);
+                                    self.save_settings();
+                                }
                                 ui.horizontal(|ui| {
                                     ui.label(tr("settings.image_panel_background"));
                                     let mut background_color = self.image_panel_background_color();
@@ -3872,7 +4048,7 @@ impl eframe::App for MangaReader {
                                 self.current_index = page_val - 1;
                                 self.reset_buffer();
                                 self.reset_pan();
-                                self.textures = self.load_pair(self.current_index, ctx);
+                                self.load_current_pair(ctx);
                             }
 
                             // --- Hide Button ---
@@ -3934,5 +4110,217 @@ impl eframe::App for MangaReader {
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_settings();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestPages(PathBuf);
+
+    impl TestPages {
+        fn new(sizes: &[[u32; 2]]) -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "manga-layout-test-{}-{}",
+                std::process::id(),
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            for (index, [width, height]) in sizes.iter().copied().enumerate() {
+                image::RgbaImage::new(width, height)
+                    .save(path.join(format!("{index:03}.png")))
+                    .unwrap();
+            }
+            Self(path)
+        }
+
+        fn reader(&self, config: AppSettings, ctx: &egui::Context) -> MangaReader {
+            let mut reader = MangaReader::with_settings(config, None);
+            reader.load_source(self.0.clone(), ctx);
+            reader
+        }
+    }
+
+    impl Drop for TestPages {
+        fn drop(&mut self) {
+            for file in fs::read_dir(&self.0).unwrap().flatten() {
+                fs::remove_file(file.path()).unwrap();
+            }
+            fs::remove_dir(&self.0).unwrap();
+        }
+    }
+
+    fn assert_view(reader: &MangaReader, index: usize, mode: PageViewOptions, count: usize) {
+        assert_eq!(reader.current_index, index);
+        assert_eq!(reader.config.page_view_options, mode);
+        assert_eq!(reader.textures.iter().flatten().count(), count);
+    }
+
+    #[test]
+    fn automatic_layout_navigates_mixed_pages_in_both_directions() {
+        let pages = TestPages::new(&[
+            [10, 20],
+            [10, 20],
+            [10, 20],
+            [30, 10],
+            [10, 20],
+            [30, 10],
+            [10, 20],
+            [10, 20],
+        ]);
+        let ctx = egui::Context::default();
+        for direction in [PageViewOptions::DoubleRL, PageViewOptions::DoubleLR] {
+            for caching in [false, true] {
+                for preloading in [false, true] {
+                    let config = AppSettings {
+                        auto_page_layout_rl: direction == PageViewOptions::DoubleRL,
+                        auto_page_layout_lr: direction == PageViewOptions::DoubleLR,
+                        enable_single_file_caching: caching,
+                        enable_animated_images: false,
+                        resize_method: ResizeMethod::None,
+                        ..AppSettings::default()
+                    };
+                    let mut reader = pages.reader(config, &ctx);
+                    let expected = [
+                        (0, direction, 2),
+                        (2, direction, 1),
+                        (3, PageViewOptions::Single, 1),
+                        (4, direction, 1),
+                        (5, PageViewOptions::Single, 1),
+                        (6, direction, 2),
+                    ];
+                    assert_view(&reader, 0, direction, 2);
+                    for &(index, mode, count) in &expected[1..] {
+                        if preloading {
+                            reader.update_buffers(&ctx);
+                        }
+                        reader.next_page(&ctx, false);
+                        assert_view(&reader, index, mode, count);
+                    }
+                    for &(index, mode, count) in expected[..expected.len() - 1].iter().rev() {
+                        if preloading {
+                            reader.update_buffers(&ctx);
+                        }
+                        reader.prev_page(&ctx, false);
+                        assert_view(&reader, index, mode, count);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_layout_preserves_pair_loading_and_fixed_navigation() {
+        let pages = TestPages::new(&[[10, 20], [30, 10], [10, 20], [30, 10]]);
+        let ctx = egui::Context::default();
+        for mode in [
+            PageViewOptions::Single,
+            PageViewOptions::DoubleRL,
+            PageViewOptions::DoubleLR,
+        ] {
+            let mut reader = pages.reader(
+                AppSettings {
+                    page_view_options: mode,
+                    enable_animated_images: false,
+                    resize_method: ResizeMethod::None,
+                    ..AppSettings::default()
+                },
+                &ctx,
+            );
+            // Single mode deliberately retains the legacy two-image preload.
+            assert_view(&reader, 0, mode, 2);
+            reader.update_buffers(&ctx);
+            let step = if mode == PageViewOptions::Single {
+                1
+            } else {
+                2
+            };
+            reader.next_page(&ctx, false);
+            assert_view(&reader, step, mode, 2);
+            reader.update_buffers(&ctx);
+            reader.prev_page(&ctx, false);
+            assert_view(&reader, 0, mode, 2);
+        }
+    }
+
+    #[test]
+    fn automatic_layout_handles_cover_last_page_and_forced_steps() {
+        let pages = TestPages::new(&[[10, 20], [10, 20], [10, 20], [30, 10]]);
+        let ctx = egui::Context::default();
+        let mut reader = pages.reader(
+            AppSettings {
+                auto_page_layout_rl: true,
+                enable_animated_images: false,
+                resize_method: ResizeMethod::None,
+                last_page_action: LastPageAction::Nothing,
+                ..AppSettings::default()
+            },
+            &ctx,
+        );
+        reader.is_shifted = true;
+        reader.load_current_pair(&ctx);
+        assert_view(&reader, 0, PageViewOptions::DoubleRL, 1);
+        reader.update_buffers(&ctx);
+        reader.next_page(&ctx, false);
+        assert_view(&reader, 1, PageViewOptions::DoubleRL, 2);
+        reader.update_buffers(&ctx);
+        reader.next_page(&ctx, true);
+        assert_view(&reader, 2, PageViewOptions::DoubleRL, 1);
+        reader.go_to_last_page(&ctx);
+        assert_view(&reader, 3, PageViewOptions::Single, 1);
+        reader.prev_page(&ctx, false);
+        assert_view(&reader, 1, PageViewOptions::DoubleRL, 2);
+        reader.prev_page(&ctx, false);
+        assert_view(&reader, 0, PageViewOptions::DoubleRL, 1);
+        reader.prev_page(&ctx, false);
+        assert_view(&reader, 0, PageViewOptions::DoubleRL, 1);
+    }
+
+    #[test]
+    fn existing_settings_default_automatic_layout_to_disabled() {
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("auto_page_layout_rl");
+        object.remove("auto_page_layout_lr");
+        let config: AppSettings = serde_json::from_value(json).unwrap();
+        assert!(!config.auto_page_layout_rl && !config.auto_page_layout_lr);
+        assert_eq!(
+            automatic_pair_count(Some([10, 10]), Some([10, 20]), false),
+            1
+        );
+        assert_eq!(automatic_pair_count(Some([10, 20]), None, false), 1);
+    }
+
+    #[test]
+    fn disabling_automatic_layout_restores_the_suppressed_second_page() {
+        let pages = TestPages::new(&[[10, 20], [30, 10], [10, 20]]);
+        let ctx = egui::Context::default();
+        let mut reader = pages.reader(
+            AppSettings {
+                auto_page_layout_rl: true,
+                enable_animated_images: false,
+                resize_method: ResizeMethod::None,
+                ..AppSettings::default()
+            },
+            &ctx,
+        );
+        assert_view(&reader, 0, PageViewOptions::DoubleRL, 1);
+        reader.update_buffers(&ctx);
+        reader.config.auto_page_layout_rl = false;
+        reader.reset_buffer();
+        reader.texture_cache.clear();
+        reader.load_current_pair(&ctx);
+        assert_view(&reader, 0, PageViewOptions::DoubleRL, 2);
+        reader.update_buffers(&ctx);
+        reader.next_page(&ctx, false);
+        assert_view(&reader, 2, PageViewOptions::DoubleRL, 1);
+
+        reader.config.auto_page_layout_rl = true;
+        reader.config.page_view_options = PageViewOptions::TopDown;
+        let pair = reader.load_pair(0, &ctx);
+        assert!(pair.iter().all(Option::is_some));
+        assert_eq!(reader.automatic_page_direction(), None);
     }
 }
